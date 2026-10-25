@@ -12,7 +12,7 @@ except ImportError:
     sys.exit("readme_stats.py needs Pillow: tools/venv/bin/pip install -r tools/requirements-perf.txt")
 
 FONT, OUT = sys.argv[1], sys.argv[2]
-STATS = [("260", "TV MODELS"), ("77", "BRANDS"), ("25", "LANGUAGES"), ("477 KB", "LAUNCHER")]
+STATS = [("280", "TV MODELS"), ("81", "BRANDS"), ("25", "LANGUAGES"), ("500 KB", "LAUNCHER")]
 W, H = 1600, 240
 img = Image.new("RGB", (W, H), "#15181e"); d = ImageDraw.Draw(img)
 def f(size, wt):

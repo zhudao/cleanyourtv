@@ -79,6 +79,7 @@
 
     <!-- Launcher settings, quick settings panel, race-weekend panel and cinematic shelf. -->
     <string name="launcher_settings">Configurações do launcher</string>
+    <string name="native_settings">Configurações do fabricante</string>
     <string name="columns_label">Apps por fileira</string>
     <string name="dock_opacity_label">Opacidade da faixa do dock</string>
     <string name="rows_below_dock_label">Fileiras abaixo do dock</string>
@@ -90,6 +91,8 @@
     <string name="animations_state">Animações: %1$s</string>
     <string name="advanced_effects">Efeitos avançados</string>
     <string name="advanced_effects_state">Efeitos avançados: %1$s</string>
+    <string name="open_on_start_label">Abrir ao iniciar</string>
+    <string name="open_on_start_state">Abrir ao iniciar: %1$s</string>
     <string name="advanced_effects_warning">Adiciona elevação do bloco, zoom no ícone e transições de cor suaves. Pode usar mais memória; a diferença real depende da sua TV.</string>
     <string name="follow_theme">Seguir o tema (desfaz as escolhas feitas na TV)</string>
     <string name="follow_theme_hint">Usa o tema atual ou o layout e o movimento padrão. Enviar ou redefinir um tema também apaga as escolhas feitas na TV.</string>
