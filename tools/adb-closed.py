@@ -4,7 +4,8 @@
     adb-closed.py <tv ip[:port]> [port]   port defaults to TV_PORT or 5555; the IP to TV_HOST
 
 Exits 0 when the port refuses the connection or does not answer, 1 when it is still open, and 2
-when the check itself could not run (a name that does not resolve, no route to the TV).
+when the check itself could not run (a name that does not resolve or is not a hostname, no route to
+the TV).
 """
 import os
 import socket
@@ -65,11 +66,23 @@ def main():
         print(f"{host}:{port} did not answer in {TIMEOUT_S:.0f} s: closed, unless the TV is off or not at "
               "this address.")
         return 0
+    except UnicodeError:
+        # getaddrinfo runs the name through the idna codec, which raises UnicodeError on an empty or
+        # over-long label (192.168.1..50, a 70-character label) instead of the gaierror an unresolvable
+        # name gives. Left uncaught it printed a traceback and exited 1 - the code this tool reserves for
+        # "the port is still open" - so a typo in the address read as an open port at the closing step.
+        sys.stderr.write(f"could not check {host}:{port}: not a hostname. Check the address.\n")
+        return 2
     except OSError as e:
         sys.stderr.write(f"could not check {host}:{port} ({e}). Is the TV on and on this network?\n")
         return 2
-    sys.stderr.write(f"{host}:{port} is still open: network ADB is on. On the TV, turn USB debugging and\n"
-                     "Network/ADB debugging off, reboot it, and check again.\n")
+    # Wireless debugging has a port of its own and stays open when USB debugging goes off, so the advice
+    # names it too. The second check comes before the reboot: if this is the Wireless debugging port, a
+    # reboot leaves Wireless debugging off or starts it on a new port, and this number reads closed
+    # afterwards either way. Port 5555 is the one worth checking again after the reboot.
+    sys.stderr.write(f"{host}:{port} is still open: network ADB is on. On the TV, turn USB debugging,\n"
+                     "Network/ADB debugging and Wireless debugging off and check again, then reboot it\n"
+                     "and check once more.\n")
     return 1
 
 

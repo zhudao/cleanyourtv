@@ -61,6 +61,8 @@ class DebloatPathsTest(unittest.TestCase):
         return tools, home
 
     def run_script(self, script_path, argument, cwd, base, home):
+        if os.name != "posix" or not shutil.which("bash"):
+            raise unittest.SkipTest("disable.sh and restore.sh are POSIX scripts; they need bash")
         capture = base / "commands.txt"
         # No TV_HOST, so recovery.py looks for a record that cannot exist: that is the fallback these
         # tests exercise. HOME is isolated so a record from a real run cannot answer instead.

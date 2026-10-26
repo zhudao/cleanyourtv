@@ -12,9 +12,13 @@ build-and-install.sh, or the steps in addons/README.md; tools/theme.sh for theme
     TV_HOST=<tv ip> tools/venv/bin/python -I tools/manage.py set <switch> <json value> --theme <your theme folder>
 
 install on an installed add-on updates it (pm install -r). set writes the key into a theme folder of your own and
-pushes it with tools/theme.sh, as themes/README.md describes; it never edits the project's themes.
+pushes it with tools/theme.sh, as themes/README.md describes; it never edits the project's themes. set reads the
+value the way the key's own type in the Keys table needs - true or false for a bool, a JSON list, object or number
+where the table says so, the text itself for a string - and refuses one the launcher would ignore or a number
+outside the range the table states.
 """
 import json
+import math
 import os
 import re
 import subprocess
@@ -134,6 +138,89 @@ def find(name, root=ROOT):
     return None
 
 
+# ---------------------------------------------------------------- a switch's value
+
+def declared_kind(item):
+    """How the launcher reads a switch, from the type column of the Keys table in themes/README.md.
+
+    Every reader in Config.java is strict about the JSON type - bool() takes a Boolean and nothing else,
+    string() a String, integer() a Number in its range, the list readers an array - and a value of another type
+    is not an error there: the built-in default comes back, so the key silently does nothing on the TV while set
+    reports it as written. The table states the type of every key, so set reads the value the way that type needs
+    and refuses one the launcher would drop.
+    """
+    cell = (item.get("type") or "").strip()
+    if "config.xml only" in cell:
+        return "config-only"
+    if cell == "bool":
+        return "bool"
+    if cell.startswith("list"):
+        return "list"
+    if cell == "object":
+        return "object"
+    if declared_range(cell) != (None, None):
+        return "number"
+    return "string" if cell else None
+
+
+def declared_range(cell):
+    """The (low, high) of a range cell such as '1 to 8', or (None, None) when the cell is not a range."""
+    m = re.fullmatch(r"(-?\d+) to (-?\d+)", cell or "")
+    return (int(m.group(1)), int(m.group(2))) if m else (None, None)
+
+
+def number_in_range(key, item, parsed, text):
+    """An int the launcher's integer() would keep: truncated like Number.intValue(), inside the table's range.
+
+    integer() is `int i = ((Number) v).intValue(); return i < min || i > max ? fallback : i;`, so a float is
+    truncated on the TV and anything outside the range is silently the default. The range comes from the Keys
+    table, so the value set writes is one the launcher reads back. (lunar_utc_offset's floor in Config.java is
+    -1, the "by locale" sentinel the table's Meaning column calls Unset rather than a number to pass.)
+    """
+    cell = (item.get("type") or "").strip()
+    low, high = declared_range(cell)
+    if low is None or high is None:
+        # declared_kind() only sends a range cell here; a cell whose shape changed must not pass unchecked.
+        sys.exit(f"{key} has no range in the Keys table, so there is nothing to check {text} against")
+    # json.loads accepts NaN and Infinity; int() has no answer for them and integer() keeps the default.
+    if isinstance(parsed, float) and not math.isfinite(parsed):
+        sys.exit(f"{key} takes {cell}, so pass a finite number, not {text}")
+    value = int(parsed)
+    if not low <= value <= high:
+        sys.exit(f"{key} takes {cell}, so {text} is out of range and the launcher would keep the default")
+    return value
+
+
+def value_as(key, item, text):
+    """The argument read the way the key's type needs, or a refusal naming what the key takes."""
+    kind = declared_kind(item)
+    if kind == "config-only":
+        sys.exit(f"{key} is only read from config.xml, not from a theme, so a theme push cannot set it")
+    if kind == "bool":
+        if text.strip().lower() not in ("true", "false"):
+            sys.exit(f"{key} is a bool, so pass true or false, not {text}")
+        return text.strip().lower() == "true"
+    if kind in (None, "string"):
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            return text
+        # A string key is read as a String only, so `set greeting_name 42` means the text 42, not a number.
+        return parsed if isinstance(parsed, str) else text
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = None
+    wanted = {"list": list, "object": dict, "number": (int, float)}[kind]
+    # A Python bool is an int, so it would pass the number test while the launcher's integer() drops it.
+    if not isinstance(parsed, wanted) or isinstance(parsed, bool):
+        example = {"list": '["a", "b"]', "object": '{"key": "value"}', "number": "6"}[kind]
+        sys.exit(f"{key} takes {item.get('type')}, so pass {example}, not {text}")
+    if kind == "number":
+        return number_in_range(key, item, parsed, text)
+    return parsed
+
+
 # ---------------------------------------------------------------- the TV
 
 def tv_python():
@@ -168,7 +255,8 @@ def install_addon(item, extra):
         # The creator's own script, as their README says to run it.
         return run(["bash", str(folder / item["script"])] + extra, ROOT)
     # No script: the steps addons/README.md gives for every add-on.
-    gradlew = "gradlew.bat" if os.name == "nt" else "./gradlew"
+    # Windows resolves a relative program against this process's directory, not cwd, so give the full path.
+    gradlew = str(folder / "gradlew.bat") if os.name == "nt" else "./gradlew"
     code = run([gradlew, "assembleRelease"], folder)
     if code:
         return code
@@ -261,15 +349,13 @@ def cmd_remove(name):
 
 
 def cmd_set(key, value, theme_folder):
-    if not find(key) or find(key)["kind"] != "switch":
+    item = find(key)
+    if not item or item["kind"] != "switch":
         sys.exit(f"no switch called {key}")
     folder = Path(theme_folder).resolve()
     if ROOT / "themes" in folder.parents or folder == ROOT / "themes":
         sys.exit("use a theme folder of your own, not one of the project's (copy one first)")
-    try:
-        parsed = json.loads(value)
-    except ValueError:
-        parsed = value
+    parsed = value_as(key, item, value)   # before the file is written or anything is pushed
     f = folder / "config.json"
     data = json.loads(f.read_text(encoding="utf-8")) if f.is_file() else {}
     data[key] = parsed

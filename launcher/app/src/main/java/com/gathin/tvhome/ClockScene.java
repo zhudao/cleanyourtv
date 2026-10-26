@@ -14,6 +14,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.DisplayMetrics;
 import android.view.View;
+import android.widget.ImageView;
 
 import java.io.File;
 import java.util.Random;
@@ -35,7 +36,7 @@ final class ClockScene {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Random random = new Random();
     private final View content;
-    private final View ambient;
+    private final ImageView ambient;
     private final GradientDrawable glow;
     private int colorIndex;
     private int glowColor;
@@ -129,7 +130,10 @@ final class ClockScene {
                     return;
                 }
                 wallpaperShown = true;
-                ambient.setBackground(new LayerDrawable(new Drawable[]{
+                // As the image, not the background: a background is stretched to the view, so a picture of
+                // another shape than the screen would be distorted. centerCrop scales and crops it like Home.
+                ambient.setBackground(null);
+                ambient.setImageDrawable(new LayerDrawable(new Drawable[]{
                         new BitmapDrawable(res, bmp), new ColorDrawable(shade)}));
             });
         }, "clock-wallpaper").start();

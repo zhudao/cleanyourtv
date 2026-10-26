@@ -8,7 +8,7 @@
 #    disable, so anything that was already off stays off) and hands Home back to the stock launcher.
 # 2. Puts the Ambient screensaver back (it was com.google.android.backdrop/.Backdrop).
 set -euo pipefail
-: "${TV_HOST:?set TV_HOST to the projector IP, e.g. TV_HOST=192.168.68.51 $0}"
+: "${TV_HOST:?set TV_HOST to the projector IP, e.g. TV_HOST=192.168.1.50 $0}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 PY="$ROOT/tools/venv/bin/python"

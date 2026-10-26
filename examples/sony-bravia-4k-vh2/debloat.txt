@@ -1,5 +1,6 @@
-# Sony BRAVIA 4K VH2 (device BRAVIA_VH2, KD-55X80J, MediaTek), EU firmware
-# Android 12 (Google TV, API 31), build BRAVIA_VH2_EU-user 12 STT2.230505.001.S136 682241
+# Sony BRAVIA 4K VH2 (device BRAVIA_VH2, KD-55X80J / XR-65A83J, MediaTek), EU firmware
+# Android 12 (Google TV, API 31), build BRAVIA_VH2_EU-user 12 STT2.230505.001.S136 682241;
+# the XR-65A83J reports BRAVIA_VH2_M_EU-user with the same build number
 #
 # Apply:   TV_HOST=<tv ip> tools/disable.sh examples/sony-bravia-4k-vh2/debloat.txt
 # Undo:    TV_HOST=<tv ip> tools/restore.sh examples/sony-bravia-4k-vh2/debloat.txt com.google.android.apps.tv.launcherx
@@ -65,6 +66,19 @@
 # broken in daily use (owner's report).
 # The commented "one day" group at the end was disabled four days later and has only had a day so far.
 
+# Fourth unit, EU M variant: hardware SKU XR-65A83J, product BRAVIA_VH2_M_EU, Android 12/API 31,
+# build BRAVIA_VH2_M_EU-user 12 STT2.230505.001.S136 682241. This unit behaved like the UC/PA units
+# for Home handover: after the replacement launcher was installed, setupwraith and launcherx were both
+# disabled, and Home stayed on the replacement launcher. HDMI/input services, Bluetooth, Wi-Fi, Assistant,
+# Chromecast and firmware updates were kept. The owner-selected apps below were disabled and lived with
+# since 19 October 2026; they are choices, not requirements of the VH2 platform.
+
+# Fourth unit: owner-selected streaming/social apps (off by choice there; uncomment the ones you don't use)
+# com.spotify.tv.android
+# com.aspiro.tidal
+# com.curiosity.curiositystream.androidtv
+# com.facebook.katana
+
 # ACR viewing tracker
 tv.samba.ssm                                   # Samba TV fingerprints what's on screen
 tv.samba.ssm.ui
@@ -124,9 +138,10 @@ com.google.android.videos                      # Google TV Movies & TV
 # Google TV setup wizard: claims HOME and takes over once the stock launcher is disabled
 com.google.android.tungsten.setupwraith
 
-# Stock Google TV launcher. Left ENABLED on the EU unit, where Home resolved to the new launcher by
-# itself. Uncomment on UC firmware, where launcherx outranks set-home-activity at priority=2 and Home
-# stays on it otherwise. Only ever with the replacement launcher installed and claiming HOME first:
+# Stock Google TV launcher. Left ENABLED on the original EU unit, where Home resolved to the new launcher
+# by itself. Uncomment on UC, PA and the XR-65A83J M_EU unit, where launcherx outranks set-home-activity
+# at priority=2 and Home stays on it otherwise. Only ever with the replacement launcher installed and
+# claiming HOME first:
 # disable.sh's Home guard refuses it otherwise, and restore.sh puts it back.
 # com.google.android.apps.tv.launcherx
 # com.sony.dtv.launcherxcustomizer             # Sony's add-on for launcherx; disabled with it on the PA unit

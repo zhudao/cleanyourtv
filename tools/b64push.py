@@ -5,6 +5,12 @@ Usage: b64push.py <local file> <remote path>
 
 The file is assembled under a temporary name next to the target and checked with md5sum; only a
 matching copy is moved over the target, so a failed or corrupted transfer leaves the old file alone.
+Where the TV refuses that move (some firmware refuses rename(2) in /data/local/tmp, #1588), the
+verified file is copied over the target and checked again. That copy is not atomic.
+
+Exit status: 0 the copy is on the TV, 1 a transfer failed (the target is as it was, unless that
+copy failed or was interrupted, which the message says), 2 the arguments were refused, so nothing
+was sent and no TV was opened.
 """
 import base64
 import hashlib
@@ -40,8 +46,16 @@ def main():
         sys.stderr.write(f"refusing remote path {remote!r}: use an absolute path of letters, digits, "
                          "'.', '_', '-' and '/', without '..'\n")
         return 2
-    with open(local, "rb") as f:
-        data = f.read()
+    # Read the file here, before the TV is opened: a path typed from the wrong folder, or a build
+    # that left no APK behind, is an argument that is wrong rather than a transfer that failed, and
+    # exit 1 would look to the caller like a push that started. The OSError covers all three ways in
+    # - no such file, a directory, a file in the middle of the path - with the reason the OS gave.
+    try:
+        with open(local, "rb") as f:
+            data = f.read()
+    except OSError as error:
+        sys.stderr.write(f"cannot read {local!r}: {error.strerror or error}. Nothing was sent to the TV.\n")
+        return 2
     want = hashlib.md5(data).hexdigest()
 
     # Imported only now: tv.py exits at import time when TV_HOST is unset, which would hide the
@@ -80,9 +94,28 @@ def main():
             return 1
         out = dev.shell(f"mv -f {q(part)} {q(remote)} && echo moved", read_timeout_s=60.0)
         if "moved" not in out:
-            dev.shell(f"rm -f {q(part)}")
-            print(f"could not move the verified copy over {remote}: {out.strip()}", file=sys.stderr)
-            return 1
+            # SELinux on a TCL ak30a5 (20250610) refuses rename(2) in /data/local/tmp while cp works
+            # there (#1588). Copy the verified file over the target instead and check that copy too.
+            # Unlike the move it is not atomic: a copy that stops part-way can leave the target
+            # incomplete.
+            refused = out.strip()
+            try:
+                out = dev.shell(f"cp -f {q(part)} {q(remote)} && md5sum {q(remote)}", read_timeout_s=120.0)
+            except BaseException:
+                # A connection that drops, a read that times out or Ctrl-C while cp is writing can
+                # leave the target cut short. Say so, then let the transport error through.
+                print(f"could not move the verified copy over {remote}: {refused}", file=sys.stderr)
+                print(f"copying it over instead was interrupted. {remote} may be incomplete.",
+                      file=sys.stderr)
+                raise
+            got = out.split()[0] if out.strip() else ""
+            if got != want:
+                dev.shell(f"rm -f {q(part)}")
+                print(f"could not move the verified copy over {remote}: {refused}", file=sys.stderr)
+                print(f"copying it over instead did not give a copy with md5 {want}: {out.strip()}. "
+                      f"{remote} may be incomplete.", file=sys.stderr)
+                return 1
+            print(f"the move was refused ({refused}), so the file was copied: md5 {got} MATCH")
         return 0
     finally:
         # Exceptions (including interrupted transfers) must also clear staging. A disconnected TV

@@ -7,7 +7,7 @@
 # Needs: ADB on (Developer options > USB debugging, and network/Wireless debugging), JDK 17 or newer, the
 # Android SDK (Android Studio's default location is found), and tools/venv (see the main README).
 set -euo pipefail
-: "${TV_HOST:?set TV_HOST to the projector IP, e.g. TV_HOST=192.168.68.51 $0}"
+: "${TV_HOST:?set TV_HOST to the projector IP, e.g. TV_HOST=192.168.1.50 $0}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 export TV_HOST

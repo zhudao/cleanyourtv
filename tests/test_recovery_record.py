@@ -128,6 +128,8 @@ class RecoveryRecordTest(unittest.TestCase):
         self.state_path.write_text(json.dumps(state))
 
     def run_script(self, script, *args):
+        if os.name != "posix" or not shutil.which("bash"):
+            raise unittest.SkipTest(f"{script} is a POSIX script; it needs bash")
         env = dict(os.environ, TV_HOST="192.168.1.50", HOME=str(self.home),
                    FAKE_TV_STATE=str(self.state_path))
         return subprocess.run(

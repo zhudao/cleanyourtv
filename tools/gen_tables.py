@@ -26,7 +26,8 @@ The tables live between <!-- tv-table:start ... --> and <!-- tv-table:end --> li
 between <!-- tv-brands:start ... --> and <!-- tv-brands:end -->; everything outside them is hand-written.
 The counts are the card's alt text ("N TV models · B brands · L languages · "), the "| **L languages** |"
 feature row and STATS in tools/readme_stats.py. Exit codes: 0 up to date (or written), 1 out of date
-(--check), 2 a tv.json or a marker is wrong.
+(--check), 2 what it was given cannot be read: a tv.json, a marker, or the path in --root or --adopt
+(nothing is written then).
 """
 import argparse
 import json
@@ -277,17 +278,53 @@ def adopt(root, patch_text):
     return out
 
 
+def read_inputs(root, patch):
+    """(the patch's text or None, the reason this run cannot start or None).
+
+    Nothing is read or written when this returns a reason. Exit 1 is the code main's "README tables" job
+    reads as "the tables are out of date", so a path this script cannot read must not come back as 1: a
+    `--root` that is not a checkout (a typo, a worktree that was removed) and an `--adopt` patch that is
+    not there both ended in a FileNotFoundError traceback before, which is exit 1 - the one answer that
+    says the generated files are stale when in fact nothing was read at all.
+    """
+    if not root.is_dir():
+        return None, f"--root '{root}': not a folder. Nothing was read or written."
+    # examples/ is what it reads; the three OWNED files are the parts of the checkout it writes.
+    needs = ["examples"] + list(OWNED)
+    missing = [f"{n}/" if n == "examples" else n for n in needs if not (root / n).exists()]
+    if missing:
+        return None, (f"--root '{root}': no {', no '.join(missing)} in it. Point --root at a checkout of this "
+                      f"repository: nothing was read or written.")
+    if patch is None:
+        return None, None
+    try:
+        return Path(patch).read_text(encoding="utf-8"), None
+    except OSError as e:
+        # A path that is a directory is OSError too (IsADirectoryError), so this covers a patch folder.
+        # The path is quoted so an empty --adopt ('' or a stray pair of quotes) is visible in the line.
+        return None, f"--adopt: cannot read '{patch}': {e.strerror}. Nothing was written."
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
     ap.add_argument("--check", action="store_true", help="write nothing; exit 1 when a file is out of date")
-    ap.add_argument("--font", help="Fredoka TTF: redraw docs/stats.png and docs/card.jpg when a count changed")
+    ap.add_argument("--font", help="Fredoka TTF (variable, from Google Fonts; not in this repo): redraw "
+                                   "docs/stats.png and docs/card.jpg when a count changed")
     ap.add_argument("--adopt", metavar="PATCH", help="write missing tv.json files from the rows in PATCH first")
     a = ap.parse_args(argv)
+    if a.font and not Path(a.font).is_file():
+        # The scripts this hands the font to exit with their own line, but subprocess.run(check=True) would
+        # then turn that into a CalledProcessError traceback, which names neither the file nor where it is.
+        ap.error(f"cannot open the font at {a.font}: Fredoka (variable TTF, Google Fonts) is not in this repo")
     root = Path(a.root)
+    patch, problem = read_inputs(root, a.adopt)
+    if problem:
+        print(problem, file=sys.stderr)
+        return 2
     try:
         if a.adopt:
-            for name, what in adopt(root, Path(a.adopt).read_text(encoding="utf-8")):
+            for name, what in adopt(root, patch):
                 print(f"examples/{name}/tv.json: {what}")
         if a.check:
             out = stale(root)

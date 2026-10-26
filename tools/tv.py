@@ -10,11 +10,19 @@ Set TV_HOST to the TV's IP (or IP:port). Usage:
     tv.py --push <local> <remote>      small files only (see b64push.py for larger ones)
     tv.py --pull <remote> <local>
     tv.py --reboot                     return once the reboot request is accepted; the TV may still be restarting
+    tv.py --help                       this text; needs neither the venv nor a TV
 """
 import os
 import re
 import sys
 import time
+
+# -h/--help before the adb_shell imports and before TV_HOST is read: the usage is the first thing a
+# reader types at a script they do not know, and it needs neither the venv nor a TV. The TV_HOST check
+# below exits at import time, so a flag handled after it could never print anything but that error.
+if sys.argv[1:2] and sys.argv[1] in ("-h", "--help"):
+    print((__doc__ or "").strip())
+    sys.exit(0)
 
 from adb_shell.adb_device import AdbDeviceTcp
 from adb_shell.auth.keygen import keygen
@@ -66,11 +74,11 @@ if not os.path.exists(KEY) and os.path.exists(ADB_KEY) and os.path.exists(ADB_KE
     KEY = ADB_KEY
 
 
-def restrict(path):
-    """Keep a private key to this account. Reported, never fatal: the key still works either way.
-    Windows has no POSIX mode bits and ignores this."""
+def restrict(path, mode=0o600):
+    """Keep a private key, or its folder, to this account. Reported, never fatal: the key still works
+    either way. Windows has no POSIX mode bits and ignores this."""
     try:
-        os.chmod(path, 0o600)
+        os.chmod(path, mode)
     except OSError as e:
         print(f"warning: could not restrict permissions on {path}: {e}", file=sys.stderr)
 
@@ -81,9 +89,19 @@ def get_signer():
     # open(), so it lands at 0666 & ~umask, which is 0644 under the usual umask: readable by every
     # other account on the machine. Google's own adb keeps ~/.android/adbkey at 0600, so match that,
     # on every run, so a key written by an earlier version of this script is repaired too.
+    # makedirs leaves a folder that already exists at its old mode (0755 from a tv.py older than
+    # #491), so the folder is set to 0700 on every run as well.
     os.makedirs(KEYDIR, mode=0o700, exist_ok=True)
+    restrict(KEYDIR, 0o700)
     if not os.path.exists(KEY):
-        keygen(KEY)
+        # Google's adb opens a new key under umask(077), so it is 0600 from the moment it exists, not
+        # only after the chmod below. adb_shell writes the .pub in the same call, so that is 0600 as
+        # well; only this script reads it.
+        old_umask = os.umask(0o077)
+        try:
+            keygen(KEY)
+        finally:
+            os.umask(old_umask)
     if KEY != ADB_KEY:   # the stock key belongs to the user's own adb; don't touch its permissions
         restrict(KEY)
     with open(KEY) as f:
@@ -99,6 +117,46 @@ def connect(timeout=120):
     return dev
 
 
+def connect_error(e):
+    """What to print when connect() raised `e`, or None for an error this has nothing to add to.
+
+    A refused port and a Wireless debugging port used to end tv.py with a traceback, which says nothing
+    about the port to use instead (#1578). connect() itself still raises: check.py (through
+    recovery.connect()) and privacy.py catch its errors with wording and exit codes of their own, and
+    recovery.py --save still lets them through (a follow-up)."""
+    # Imported here rather than with the client above, so the stub adb_shell in the tests (adb_device
+    # and auth only) still loads this file.
+    from adb_shell.exceptions import AdbTimeoutError, InvalidCommandError, TcpTimeoutException
+    target = f"{HOST}:{PORT}"
+    # The way to port 5555 on a TV whose only network ADB is Wireless debugging (docs/TROUBLESHOOTING.md).
+    pair = ("pair the TV once with the stock adb (`adb pair`, then `adb connect` to the port its Wireless "
+            "debugging screen shows) and run `adb tcpip 5555`")
+    reboot = ("Port 5555 usually closes at the next reboot; `adb connect` and `adb tcpip 5555` open it "
+              "again, with no new pairing.")
+    see = "See docs/TROUBLESHOOTING.md#connecting."
+    if isinstance(e, InvalidCommandError) and "STLS" in str(e):
+        # Android 11+ answers the handshake on its Wireless debugging port with STLS, a request for TLS.
+        # adb_shell 0.4.4 (tools/requirements.txt) has no TLS, so no TV_HOST or TV_PORT gets past it.
+        return (f"{target} is a Wireless debugging port: it asks for TLS, which tv.py cannot use.\n"
+                f"To use port 5555 instead, {pair}, then set TV_HOST to the TV's IP alone and leave TV_PORT "
+                f"unset. {reboot} {see}")
+    if isinstance(e, ConnectionRefusedError):
+        return (f"{target} refused the connection: nothing listens for ADB there, so network ADB is off "
+                f"or on another port.\nIf the TV has Wireless debugging, {pair}. {reboot} A firmware that "
+                f"runs adbd on a port of its own takes TV_HOST=<tv ip>:<port>. {see}")
+    if isinstance(e, (TcpTimeoutException, AdbTimeoutError)):
+        return (f"{target} took the connection, but ADB did not finish the handshake "
+                f"({type(e).__name__}: {e}).\nIf the TV shows \"Allow USB debugging?\", accept it and run "
+                f"this again; otherwise check that TV_HOST is the TV's address. {see}")
+    # Only a socket error means the TV was not reached. get_signer() runs inside connect() too, before any
+    # socket opens, and its errors (adbkey.pub missing, a key or folder a `sudo` run left owned by root)
+    # carry the file's name, which no socket error does: they keep the traceback, which names the file. A
+    # connection reset or broken in the handshake keeps its traceback too, as the port was reached.
+    if isinstance(e, OSError) and e.filename is None and not isinstance(e, ConnectionError):
+        return f"could not reach {target} ({e}). Is the TV on and on this network? {see}"
+    return None
+
+
 USAGE = """usage:
     tv.py --probe
     tv.py --screenshot <local.png> [KEY ...] [--wait SECONDS]
@@ -106,6 +164,7 @@ USAGE = """usage:
     tv.py --pull <remote> <local>
     tv.py --batch < commands.txt
     tv.py --reboot
+    tv.py --help
     tv.py <shell command...>
 """
 # Arguments each known flag takes, the flag included. The shell branch takes anything, so a flag
@@ -127,24 +186,32 @@ def check_arity(args):
     """Reject a known flag with the wrong argument count before connecting.
 
     Without this, `--screenshot` with a destination missing falls through to the shell branch and
-    the TV tries to run `--screenshot` as a command."""
+    the TV tries to run `--screenshot` as a command. The same goes for a flag this script does not
+    have at all: `--proob` used to be sent to the TV, whose shell answered "inaccessible or not
+    found" while tv.py exited 0, so a mistyped flag looked like a command that ran."""
     if args and args[0] in ARITY and len(args) != ARITY[args[0]]:
         sys.stderr.write(USAGE)
         sys.exit(2)
     if args and args[0] == "--screenshot":
         screenshot_args(args[1:])
+    elif args and args[0].startswith("-") and args[0] not in ARITY:
+        usage_error(f"not a flag of tv.py: {args[0]!r}")
 
 
 def screenshot_args(rest):
     """`<local.png> [KEY ...] [--wait SECONDS]` into (local, keys, wait), or a usage error before connecting.
 
     KEY is an Android key name without the KEYCODE_ prefix (HOME, DPAD_RIGHT), a full name (KEYCODE_BACK)
-    or a numeric keycode (83). The screenshot is taken --wait seconds after the last key (default 1)."""
-    local, keys, wait = None, [], 1.0
+    or a numeric keycode (83). The screenshot is taken --wait seconds after the last key (default 1). With no
+    keys, --wait still pauses before the capture, so a screen that is still loading can settle; without it,
+    no keys means no pause."""
+    local, keys, wait = None, [], None
     i = 0
     while i < len(rest):
         arg = rest[i]
-        if arg == "--wait" and i + 1 < len(rest):
+        if arg == "--wait":
+            if i + 1 == len(rest):
+                usage_error("--wait needs a number of seconds")
             try:
                 wait = float(rest[i + 1])
             except ValueError:
@@ -163,6 +230,8 @@ def screenshot_args(rest):
         i += 1
     if local is None:
         usage_error("--screenshot needs the file to save to")
+    if wait is None:
+        wait = 1.0 if keys else 0.0
     return local, keys, wait
 
 
@@ -176,7 +245,7 @@ def keyevent(name):
     return name if name.isdigit() or name.startswith("KEYCODE_") else "KEYCODE_" + name
 
 
-def screenshot(dev, local, keys=(), wait=1.0):
+def screenshot(dev, local, keys=(), wait=0.0):
     """Press `keys`, then capture the TV screen into `local`. Returns 0, or 1 when the capture failed or
     came back empty."""
     # Agents pass paths like shots/01-home.png before that folder exists, and the pull then fails
@@ -186,14 +255,14 @@ def screenshot(dev, local, keys=(), wait=1.0):
         if i:
             time.sleep(KEY_GAP_S)
         dev.shell(f"input keyevent {keyevent(key)}")
-    if keys:
+    if wait:
         time.sleep(wait)
     # The exit status tells a capture that failed (no file to pull) from one that came back empty: with
     # Netflix in front a TCL C755 exits 1 and leaves a 0-byte file, which is the empty case below.
     said = dev.shell(f"rm -f {SHOT_REMOTE}; screencap -p {SHOT_REMOTE}; echo rc=$?", read_timeout_s=120.0)
-    rc = next((int(line[3:]) for line in said.splitlines() if re.fullmatch(r"rc=-?\d+", line.strip())), None)
+    rc = next((int(line.strip()[3:]) for line in said.splitlines() if re.fullmatch(r"rc=-?\d+", line.strip())), None)
     if rc not in (None, 0, 1):
-        other = " ".join(line.strip() for line in said.splitlines() if line.strip() and not line.startswith("rc="))
+        other = " ".join(line.strip() for line in said.splitlines() if line.strip() and not line.strip().startswith("rc="))
         dev.shell(f"rm -f {SHOT_REMOTE}", read_timeout_s=60.0)
         print(f"screencap failed on the TV (exit status {rc}): {other or 'no output'}", file=sys.stderr)
         return 1
@@ -218,7 +287,14 @@ def screenshot(dev, local, keys=(), wait=1.0):
 def main():
     args = sys.argv[1:]
     check_arity(args)
-    dev = connect()
+    try:
+        dev = connect()
+    except Exception as e:
+        why = connect_error(e)
+        if why is None:
+            raise
+        print(why, file=sys.stderr)
+        return 2
     if args == ["--reboot"]:
         # Native reboot waits for ADB's OKAY, not the shell's CLSE that can be lost as adbd stops (#995).
         try:

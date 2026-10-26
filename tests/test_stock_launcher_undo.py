@@ -18,6 +18,11 @@ line names as the stock launcher (`Stock launcher:`, `Stock launcher is`, `Stock
 the packages the file's restore commands pass. A named stock launcher that the list disables has to be
 one of those passed packages; `com.google.android.tvlauncher` is exempt because it is the default.
 
+A list can also leave the stock launcher off its active lines and let `launcher/build-and-install.sh`
+disable it once the new launcher owns Home. That counts as disabling it when the line naming it says so
+(`build-and-install.sh disables it`), or when the list hands the package to the installer as
+`STOCK_LAUNCHER=<package>`, the setting the installer disables.
+
 Run from the repository root: python3 -m unittest discover -s tests -v
 """
 import re
@@ -34,6 +39,11 @@ PACKAGE_RE = re.compile(PACKAGE)
 STOCK_CLAIM = re.compile(
     r"(?i)stock\s+(?:launcher|home)(?!'s)\s*(?:package)?\s*(?::|is|=)\s*(" + PACKAGE + r")")
 STOCK_ENV = re.compile(r"STOCK_LAUNCHER\s*[=:]\s*(" + PACKAGE + r")")
+# A line that says the install script disables the stock launcher it names: `launcher/build-and-install.sh
+# disables it`, `(build-and-install.sh disables it when the launcher takes Home)`. "never disables",
+# "does not disable" and "it would disable" are not it.
+INSTALL_DISABLES = re.compile(
+    r"(?i)build-and-install(?:\.sh|\.ps1)?\b(?:(?!\bnever\b)[^.])*\bdisables\b")
 # An active line's own trailing comment, e.g. `com.google.android.apps.tv.launcherx  # stock Google TV
 # home; com.gathin.tvhome is Home now`. The phrase has to end the naming: "stock launcher
 # recommendation rows" (com.google.android.tvrecommendations) is not a launcher.
@@ -85,16 +95,39 @@ def restore_invocations(text):
     return invocations
 
 
+def install_disables(text):
+    """The packages the list says launcher/build-and-install.sh disables, mapped to the lines that say so.
+
+    Only a package the line names as the stock launcher counts, and every `STOCK_LAUNCHER=<package>`:
+    that is the package the installer disables. `STOCK_LAUNCHER=none` names no package.
+    """
+    disabled = {}
+    for number, line in enumerate(text.splitlines(), 1):
+        named = [match.group(1) for match in STOCK_ENV.finditer(line)]
+        if INSTALL_DISABLES.search(line):
+            named += [match.group(1) for match in STOCK_CLAIM.finditer(line)]
+        for package in named:
+            disabled.setdefault(package, []).append(number)
+    return disabled
+
+
 def undo_problems(text):
     """Why this list's undo does not reach its own stock launcher, one sentence each."""
     active = {package for _, package in active_packages(text)}
     passed = {package for _, package in restore_invocations(text) if package}
+    installer = install_disables(text)
     problems = []
     for package, lines in sorted(stock_claims(text).items()):
-        if package not in active or package == DEFAULT_STOCK or package in passed:
+        if package == DEFAULT_STOCK or package in passed:
+            continue
+        if package in active:
+            how = "the list disables it"
+        elif package in installer:
+            how = f"launcher/build-and-install.sh disables it (line {installer[package][0]})"
+        else:
             continue
         problems.append(
-            f"line {lines[0]} calls {package} the stock launcher and the list disables it, but the "
+            f"line {lines[0]} calls {package} the stock launcher and {how}, but the "
             f"restore command in this file does not pass it (restore.sh falls back to "
             f"{DEFAULT_STOCK}, which this set does not ship)")
     return problems
@@ -174,6 +207,51 @@ class StockLauncherUndoTest(unittest.TestCase):
             "com.google.android.apps.tv.launcherx         # stock Google TV home; com.gathin.tvhome is Home now\n"
         )
         self.assertEqual(1, len(undo_problems(text)))
+
+    def test_a_stock_launcher_the_install_script_disables_counts(self):
+        text = (
+            "# Stock launcher:  com.google.android.apps.tv.launcherx (build-and-install.sh disables it when the launcher takes Home)\n"
+            "# Undo:    TV_HOST=<tv ip> tools/restore.sh examples/x/debloat.txt\n"
+            "com.google.android.feedback\n"
+            "# com.google.android.apps.tv.launcherx\n"
+        )
+        self.assertEqual({"com.google.android.apps.tv.launcherx": [1]}, install_disables(text))
+        problems = undo_problems(text)
+        self.assertEqual(1, len(problems))
+        self.assertIn("build-and-install.sh disables it (line 1)", problems[0])
+        passed = text.replace("debloat.txt\n", "debloat.txt com.google.android.apps.tv.launcherx\n")
+        self.assertEqual([], undo_problems(passed))
+
+    def test_the_sentence_after_the_claim_counts(self):
+        text = (
+            "# - The stock home is com.google.android.apps.tv.launcherx. launcher/build-and-install.sh disables it.\n"
+            "# Undo:    TV_HOST=<box ip> tools/restore.sh examples/x/debloat.txt\n"
+        )
+        self.assertEqual(1, len(undo_problems(text)))
+
+    def test_stock_launcher_in_the_environment_is_what_the_installer_disables(self):
+        text = (
+            "# Undo:    TV_HOST=<tv ip> tools/restore.sh examples/x/debloat.txt\n"
+            "# Stock launcher: com.jamdeo.tv.vod (JuUI). launcher/build-and-install.sh does not know that name:\n"
+            "#   TV_HOST=<tv ip> HOME_KEY_SERVICE=1 STOCK_LAUNCHER=com.jamdeo.tv.vod launcher/build-and-install.sh\n"
+        )
+        self.assertEqual({"com.jamdeo.tv.vod": [3]}, install_disables(text))
+        self.assertEqual(1, len(undo_problems(text)))
+        kept = text.replace("STOCK_LAUNCHER=com.jamdeo.tv.vod", "STOCK_LAUNCHER=none")
+        self.assertEqual({}, install_disables(kept))
+        self.assertEqual([], undo_problems(kept))
+
+    def test_an_installer_that_leaves_it_alone_needs_nothing(self):
+        for note in ("launcher/build-and-install.sh never disables it here",
+                     "launcher/build-and-install.sh does not disable it",
+                     "do not run build-and-install.sh with its defaults: it would disable it"):
+            with self.subTest(note=note):
+                text = (
+                    f"# Stock launcher: com.google.android.apps.tv.launcherx ({note})\n"
+                    "# Undo:    TV_HOST=<tv ip> tools/restore.sh examples/x/debloat.txt\n"
+                )
+                self.assertEqual({}, install_disables(text))
+                self.assertEqual([], undo_problems(text))
 
     def test_recommendation_rows_are_not_the_stock_launcher(self):
         text = (

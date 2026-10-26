@@ -404,7 +404,8 @@ class DriftCheckTest(unittest.TestCase):
         self.write_list(["com.example.music", "com.example.store; reboot"])
         self.tv(disabled=[STOCK])
         result = self.run_check("--fix", str(self.list_path))
-        self.assertNotEqual(result.returncode, 0)
+        # 2, the list could not be used: 1 is what a weekly job reads as drift.
+        self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("not a package name", result.stderr)
         self.assertEqual(self.sent(), [])
 

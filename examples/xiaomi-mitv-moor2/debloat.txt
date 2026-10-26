@@ -118,7 +118,8 @@ com.google.android.play.games          # Play Games
 # Android ignores android:priority on HOME filters for non-system apps and `cmd package
 # set-home-activity` reports Success without taking effect (not even across a reboot). Disabling
 # the setupwraith PACKAGE is what frees the slot; `pm disable-user` on its individual components is
-# refused with a SecurityException. See the README troubleshooting section.
+# refused with a SecurityException. See docs/TROUBLESHOOTING.md,
+# "The new launcher still doesn't own Home".
 #
 # Trade-off: setupwraith is the first-run setup wizard. Everyday use is unaffected, but re-enable it
 # before a factory reset - tools/restore.sh does that for you while this line is in the list.
