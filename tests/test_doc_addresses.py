@@ -99,9 +99,9 @@ class DocAddressesTest(unittest.TestCase):
     def test_pages_are_read(self):
         read = {path.relative_to(ROOT).as_posix() for path in pages(ROOT)}
         for page in ("README.md", "docs/REMOTE.md", "examples/philips-google-tv-ta7/README.md",
-                     "examples/skyworth-swtv-24ae-4k-nf/debloat.txt",
-                     "examples/anker-nebula-d2426/restore.sh"):
+                     "examples/skyworth-swtv-24ae-4k-nf/debloat.txt"):
             self.assertIn(page, read)
+        self.assertIn(".sh", SUFFIXES, "a folder's own scripts are read too")
 
     def test_no_page_gives_the_address_of_a_real_set(self):
         self.assertEqual([], problems(ROOT, addresses),

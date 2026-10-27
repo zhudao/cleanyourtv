@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -75,6 +76,10 @@ public class HomeKeyService extends AccessibilityService {
     private long powerOnUntil;
     /** home_long_press_home: this service takes every Home press, held ones included. */
     private boolean homeLongPressHome;
+    /** app_keys "front:" entries, and the package of the activity in front, from window changes while there are any. */
+    private Map<Integer, String> frontAppKeys = Collections.emptyMap();
+    private Map<Integer, String> frontAppScancodes = Collections.emptyMap();
+    private String frontPackage = "";
     /** power_on_home_always: Home at every power-on, not only over Live TV. */
     private boolean powerOnAlways;
     /** power_on_home: re-arms after the screen turns on; null unless the key is on. */
@@ -190,6 +195,9 @@ public class HomeKeyService extends AccessibilityService {
         appScancodes = RemoteKeys.parseAppScancodes(config.appKeys);
         RemoteKeys.applyKeyFilter(this, config.keyFilter);
         homeLongPressHome = config.homeLongPressHome;
+        frontAppKeys = RemoteKeys.parseFrontAppKeys(config.appKeys);
+        frontAppScancodes = RemoteKeys.parseFrontAppScancodes(config.appKeys);
+        boolean watchFront = !frontAppKeys.isEmpty() || !frontAppScancodes.isEmpty();
         stockHome.clear();
         stockHomePackage = config.stockHomeRedirect;
         if (!config.stockHomeRedirect.isEmpty()) {
@@ -214,7 +222,7 @@ public class HomeKeyService extends AccessibilityService {
         }
         // home_key_service.xml subscribes to no events, so the redirects ask for window changes only when one is on.
         AccessibilityServiceInfo info = getServiceInfo();
-        if (info != null && (!stockHome.isEmpty() || !powerOnLiveTv.isEmpty())) {
+        if (info != null && (!stockHome.isEmpty() || !powerOnLiveTv.isEmpty() || watchFront)) {
             info.eventTypes |= AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED;
             setServiceInfo(info);
         }
@@ -227,6 +235,13 @@ public class HomeKeyService extends AccessibilityService {
             gamepads = new GamepadPassthrough(this);
             gamepads.start();
         }
+    }
+
+    /** A tap's target: the "front:" entry while the button's own app is already in front, else the usual one. */
+    private String inFront(Map<Integer, String> keys, Map<Integer, String> front, int code) {
+        String target = keys.get(code);
+        String alt = front.get(code);
+        return alt != null && RemoteKeys.inFront(target, frontPackage) ? alt : target;
     }
 
     private boolean isSettingsKey(KeyEvent event) {
@@ -245,7 +260,7 @@ public class HomeKeyService extends AccessibilityService {
         }
         if (consumeVolumeKeys && VolumeKeys.handle(this, event)) return true;
         // A scancode entry is more specific than any keycode, so it goes first.
-        if (RemoteKeys.handle(this, event, appScancodes.get(event.getScanCode()),
+        if (RemoteKeys.handle(this, event, inFront(appScancodes, frontAppScancodes, event.getScanCode()),
                 holdAppScancodes.get(event.getScanCode()))) return true;
         // The stock launcher handled the remote's Settings button; with it disabled the button does nothing.
         if (isSettingsKey(event)) {
@@ -260,7 +275,7 @@ public class HomeKeyService extends AccessibilityService {
             }
             return true;
         }
-        if (RemoteKeys.handle(this, event, appKeys.get(event.getKeyCode()),
+        if (RemoteKeys.handle(this, event, inFront(appKeys, frontAppKeys, event.getKeyCode()),
                 holdAppKeys.get(event.getKeyCode()))) return true;
         // home_long_press_home: Android never sees the Home key, so a held press cannot turn into ALL_APPS.
         if (homeLongPressHome && event.getKeyCode() == KeyEvent.KEYCODE_HOME) {
@@ -286,6 +301,17 @@ public class HomeKeyService extends AccessibilityService {
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
+        // app_keys "front:" entries: only activities count, so a toast or the volume bar doesn't change the app in front.
+        if ((!frontAppKeys.isEmpty() || !frontAppScancodes.isEmpty())
+                && event.getPackageName() != null && event.getClassName() != null) {
+            try {
+                ComponentName window = new ComponentName(event.getPackageName().toString(), event.getClassName().toString());
+                getPackageManager().getActivityInfo(window, 0);
+                frontPackage = window.getPackageName();
+            } catch (PackageManager.NameNotFoundException notAnActivity) {
+                // a dialog, panel or overlay: the app under it is still in front
+            }
+        }
         // power_on_home: the firmware opened Live TV by itself at power-on, before anyone pressed a key.
         if (powerOnRedirect(powerOnLiveTv, event.getPackageName(), SystemClock.elapsedRealtime(), powerOnUntil)) {
             openHome();
@@ -326,6 +352,17 @@ public class HomeKeyService extends AccessibilityService {
 
     static boolean stillArmed(long now, long armedUntil) {
         return now < armedUntil;
+    }
+
+    /** The settings menu offers Restart only while this helper is bound: it opens the system power menu. */
+    static boolean canOpenPowerMenu() {
+        return running != null;
+    }
+
+    /** The system power menu (Restart, and Power off where the firmware has it); the TV asks before it acts. */
+    static void openPowerMenu() {
+        HomeKeyService service = running;
+        if (service != null) service.performGlobalAction(GLOBAL_ACTION_POWER_DIALOG);
     }
 
     static boolean powerOnRedirect(String liveTv, CharSequence pkg, long now, long armedUntil) {

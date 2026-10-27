@@ -9,8 +9,10 @@ Where the TV refuses that move (some firmware refuses rename(2) in /data/local/t
 verified file is copied over the target and checked again. That copy is not atomic.
 
 Exit status: 0 the copy is on the TV, 1 a transfer failed (the target is as it was, unless that
-copy failed or was interrupted, which the message says), 2 the arguments were refused, so nothing
-was sent and no TV was opened.
+copy failed or was interrupted, which the message says), 2 nothing was sent: the arguments were
+refused, or the connection failed in one of the ways tv.py explains (a refused port, a Wireless
+debugging port, a handshake that timed out, a TV that cannot be reached). Why it stopped goes to
+stderr, which the scripts that throw the progress on stdout away still show.
 """
 import base64
 import hashlib
@@ -63,7 +65,16 @@ def main():
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import tv  # noqa: E402
 
-    dev = tv.connect()
+    # A refused port or a TV that cannot be reached gets tv.py's own explanation, not a traceback, and
+    # exits 2 as tv.py does: nothing was sent. An error tv.py has nothing to add to keeps its traceback.
+    try:
+        dev = tv.connect()
+    except Exception as error:
+        why = tv.connect_error(error)
+        if why is None:
+            raise
+        print(f"{why}\nNothing was sent to the TV.", file=sys.stderr)
+        return 2
     b64 = remote + ".b64.part"
     part = remote + ".part"
     try:
@@ -77,17 +88,22 @@ def main():
             piece = base64.b64encode(data[i * chunk:(i + 1) * chunk]).decode()
             out = dev.shell(f"echo '{piece}' >> {q(b64)} && echo ok{i}", read_timeout_s=60.0)
             if f"ok{i}" not in out:
-                print(f"chunk {i} failed: {out}")
+                if i:
+                    print(flush=True)   # end the progress line, so the reason starts a line of its own
+                print(f"chunk {i} failed: {out.strip() or 'no output'}", file=sys.stderr)
                 dev.shell(f"rm -f {q(b64)} {q(part)}")
+                print(f"{remote} was left as it was.", file=sys.stderr)
                 return 1
             print(f"\rchunk {i + 1}/{n}", end="", flush=True)
         if n:
-            print()
+            print(flush=True)
         out = dev.shell(f"base64 -d < {q(b64)} > {q(part)} && md5sum {q(part)}; rm -f {q(b64)}",
                         read_timeout_s=120.0)
         got = out.split()[0] if out.strip() else ""
         ok = got == want
-        print("md5 remote:", got, "local:", want, "MATCH" if ok else "MISMATCH")
+        # A match stays on stdout, where the photo and news screensaver scripts look for "md5".
+        print("md5 remote:", got, "local:", want, "MATCH" if ok else "MISMATCH",
+              file=sys.stdout if ok else sys.stderr)
         if not ok:
             dev.shell(f"rm -f {q(part)}")
             print(f"{remote} was left as it was.", file=sys.stderr)

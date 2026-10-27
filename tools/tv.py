@@ -11,9 +11,18 @@ Set TV_HOST to the TV's IP (or IP:port). Usage:
     tv.py --pull <remote> <local>
     tv.py --reboot                     return once the reboot request is accepted; the TV may still be restarting
     tv.py --help                       this text; needs neither the venv nor a TV
+
+Exit status: 0 the command ran (the TV's own answer is in its output), 1 the screenshot came back
+empty or failed, 2 it was refused before anything ran on the TV - a flag it does not have, a local
+path that is not there, a port it could not open.
+
+Set TV_ADB_BINARY to the Google adb executable to use an already connected, paired transport
+(including encrypted Wireless debugging). See tools/native-adb.md.
 """
+import errno
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -24,9 +33,35 @@ if sys.argv[1:2] and sys.argv[1] in ("-h", "--help"):
     print((__doc__ or "").strip())
     sys.exit(0)
 
-from adb_shell.adb_device import AdbDeviceTcp
-from adb_shell.auth.keygen import keygen
-from adb_shell.auth.sign_pythonrsa import PythonRSASigner
+# The docs type `tools/tv.py ...`, which starts the first python3 on PATH, and that one seldom has
+# adb_shell: the README installs it into tools/venv only. Run that way, tv.py starts again under the
+# venv's Python, or says how to make the venv, instead of ending in a ModuleNotFoundError traceback.
+# Only when run as a script: recovery.py, privacy.py, bench.py and the tests import this file and
+# handle a missing client themselves.
+try:
+    from adb_shell.adb_device import AdbDeviceTcp
+    from adb_shell.auth.keygen import keygen
+    from adb_shell.auth.sign_pythonrsa import PythonRSASigner
+except ImportError as e:
+    if __name__ != "__main__":
+        raise
+    _dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "venv")
+    _venv = next((p for p in (os.path.join(_dir, "bin", "python"), os.path.join(_dir, "Scripts", "python.exe"))
+                  if os.path.isfile(p)), None)
+    # Once only, marked in the environment: a venv that lacks adb_shell as well gets the message below
+    # rather than another run of itself.
+    if _venv and not os.environ.get("CLEANYOURTV_TV_PY_VENV"):
+        os.environ["CLEANYOURTV_TV_PY_VENV"] = "1"
+        _args = [_venv, "-I", os.path.abspath(__file__), *sys.argv[1:]]
+        if os.name == "nt":
+            # No exec on Windows: os.execv starts a second process, and the shell takes its prompt back.
+            import subprocess
+            sys.exit(subprocess.call(_args))
+        os.execv(_venv, _args)
+    _make = (r"python -m venv tools\venv; tools\venv\Scripts\python.exe -m pip install -r tools\requirements.txt"
+             if os.name == "nt" else
+             "python3 -m venv tools/venv && tools/venv/bin/pip install -r tools/requirements.txt")
+    sys.exit(f"tools/tv.py needs the packages in tools/requirements.txt ({e}).\nrun: {_make}")
 
 # Windows consoles often use an old code page (cp1251, cp1252 and others) that cannot print every character
 # in dumpsys output. Python then stops with an error in the middle. disable.ps1 reads this output to see if
@@ -68,7 +103,8 @@ except ValueError:
 KEYDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "adbkey")
 KEY = os.path.join(KEYDIR, "adbkey")
 # Reuse the stock adb key when the TV already trusts it (platform-tools / Android Studio users), so the
-# "Allow USB debugging?" prompt doesn't come back a second time for this client. From #105.
+# "Allow USB debugging?" prompt doesn't come back a second time for this client. From #105. While
+# tools/adbkey has no key, the stock key is the only one; once it has one, connect() offers both.
 ADB_KEY = os.path.join(os.path.expanduser("~"), ".android", "adbkey")
 if not os.path.exists(KEY) and os.path.exists(ADB_KEY) and os.path.exists(ADB_KEY + ".pub"):
     KEY = ADB_KEY
@@ -111,9 +147,94 @@ def get_signer():
     return PythonRSASigner(pub, priv)
 
 
+def stock_signer():
+    """The stock ~/.android/adbkey, to offer after tools/adbkey's key, or None.
+
+    A tools/adbkey made before the TV approved the stock adb key kept a set that trusts that key
+    `unauthorized` until the folder was deleted (#1526). adb_shell signs the TV's token with each key in
+    turn, as the stock adb does with its keys, and sends the first key's public half (the "Allow USB
+    debugging?" prompt) only when the TV accepts none. So a second key adds no prompt, and the prompt
+    still asks for tools/adbkey's key. The stock key is only read, never chmod-ed, and one that cannot
+    be read or parsed is left out rather than stopping a connection tools/adbkey's key can make."""
+    if KEY == ADB_KEY or not (os.path.exists(ADB_KEY) and os.path.exists(ADB_KEY + ".pub")):
+        return None
+    try:
+        with open(ADB_KEY) as f:
+            priv = f.read()
+        with open(ADB_KEY + ".pub") as f:
+            pub = f.read()
+        return PythonRSASigner(pub, priv)
+    except Exception:   # unreadable (a `sudo adb` run can leave it root's), or not a key adb_shell parses
+        return None
+
+
+class NativeAdbError(RuntimeError):
+    """The selected Google ADB transport is unavailable or an operation failed."""
+
+
+class NativeAdbDevice:
+    """The subset of adb_shell used by the tools, over an existing Google ADB transport.
+
+    Every command selects the same explicit endpoint. Never select the first connected TV,
+    change adbd's mode, or disconnect a transport another program may be using.
+    """
+
+    # b64push sizes its shell commands from this payload bound. A small value also
+    # keeps adb's command-line arguments below Windows' process argument limit.
+    max_chunk_size = 4096
+
+    def __init__(self, binary, host, port, timeout):
+        self.binary = binary
+        self.serial = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+        self.timeout = float(timeout)
+        if self._run(["get-state"]).strip() != "device":
+            raise NativeAdbError(f"{self.serial} is not an authorized ADB transport; pair and connect it first.")
+
+    def _run(self, args, timeout=None):
+        limit = self.timeout if timeout is None else float(timeout)
+        try:
+            result = subprocess.run([self.binary, "-s", self.serial, *args],
+                                    capture_output=True, text=True, errors="replace", timeout=limit)
+        except subprocess.TimeoutExpired as e:
+            raise NativeAdbError(f"Google ADB {args[0]} on {self.serial} timed out after {limit:g}s.") from e
+        except OSError as e:
+            raise NativeAdbError(f"Could not run Google ADB {self.binary!r}: {e}") from e
+        if result.returncode:
+            detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+            raise NativeAdbError(f"Google ADB {args[0]} on {self.serial}: {detail}")
+        return result.stdout
+
+    def shell(self, command, read_timeout_s=None, **kwargs):
+        # -T avoids a PTY; -x matches adb_shell's shell service: remote stderr is in the
+        # returned text and a remote exit code is not mistaken for a transport failure.
+        # Guards still see remote Error/Failure lines. No local shell interprets command.
+        return self._run(["shell", "-T", "-x", command], read_timeout_s)
+
+    def push(self, local, remote, transport_timeout_s=None, read_timeout_s=None, **kwargs):
+        self._run(["push", os.fspath(local), os.fspath(remote)],
+                  read_timeout_s if read_timeout_s is not None else transport_timeout_s)
+
+    def pull(self, remote, local, transport_timeout_s=None, read_timeout_s=None, **kwargs):
+        self._run(["pull", os.fspath(remote), os.fspath(local)],
+                  read_timeout_s if read_timeout_s is not None else transport_timeout_s)
+
+    def reboot(self):
+        self._run(["reboot"])
+
+    def close(self):
+        pass  # Each subprocess is closed; leave the shared ADB server and transport alone.
+
+
 def connect(timeout=120):
+    binary = os.environ.get("TV_ADB_BINARY")
+    if binary:
+        return NativeAdbDevice(binary, HOST, PORT, timeout)
     dev = AdbDeviceTcp(HOST, PORT, default_transport_timeout_s=float(timeout))
-    dev.connect(rsa_keys=[get_signer()], transport_timeout_s=float(timeout), auth_timeout_s=timeout)
+    keys = [get_signer()]   # first, so the prompt asks for the same key as before
+    stock = stock_signer()
+    if stock is not None:
+        keys.append(stock)
+    dev.connect(rsa_keys=keys, transport_timeout_s=float(timeout), auth_timeout_s=timeout)
     return dev
 
 
@@ -124,6 +245,8 @@ def connect_error(e):
     about the port to use instead (#1578). connect() itself still raises: check.py (through
     recovery.connect()) and privacy.py catch its errors with wording and exit codes of their own, and
     recovery.py --save still lets them through (a follow-up)."""
+    if isinstance(e, NativeAdbError):
+        return str(e)
     # Imported here rather than with the client above, so the stub adb_shell in the tests (adb_device
     # and auth only) still loads this file.
     from adb_shell.exceptions import AdbTimeoutError, InvalidCommandError, TcpTimeoutException
@@ -143,7 +266,8 @@ def connect_error(e):
     if isinstance(e, ConnectionRefusedError):
         return (f"{target} refused the connection: nothing listens for ADB there, so network ADB is off "
                 f"or on another port.\nIf the TV has Wireless debugging, {pair}. {reboot} A firmware that "
-                f"runs adbd on a port of its own takes TV_HOST=<tv ip>:<port>. {see}")
+                f"runs adbd on a port of its own takes TV_HOST=<tv ip>:<port>.\nNot an Android TV (Samsung, LG, "
+                f"Roku)? There's no ADB to connect to; see https://cleanyour.tv/not-android. {see}")
     if isinstance(e, (TcpTimeoutException, AdbTimeoutError)):
         return (f"{target} took the connection, but ADB did not finish the handshake "
                 f"({type(e).__name__}: {e}).\nIf the TV shows \"Allow USB debugging?\", accept it and run "
@@ -153,6 +277,20 @@ def connect_error(e):
     # carry the file's name, which no socket error does: they keep the traceback, which names the file. A
     # connection reset or broken in the handshake keeps its traceback too, as the port was reached.
     if isinstance(e, OSError) and e.filename is None and not isinstance(e, ConnectionError):
+        # macOS Local Network privacy denies a process the local subnet and the kernel reports that as
+        # EHOSTUNREACH, the same errno as a TV that is switched off, so "is the TV on?" sends people
+        # rebuilding a network that was never broken. The permission belongs to the app that runs this
+        # script (Terminal, iTerm2, VS Code), not to python or adb: switching ADB client does not avoid it,
+        # and a denial sticks once it happens. ARP and mDNS keep answering while it is denied, so the TV
+        # stays discoverable and only unicast fails, which is what makes it read as a network fault. The
+        # default gateway kept answering throughout, so it is the one address that tells the two apart.
+        if sys.platform == "darwin" and e.errno == errno.EHOSTUNREACH:
+            return (f"could not reach {target} ({e}). Is the TV on and on this network?\n"
+                    f"On macOS this is also what Local Network privacy looks like. Allow the app that runs "
+                    f"tv.py (Terminal, iTerm2, VS Code) under System Settings > Privacy & Security > Local "
+                    f"Network, then quit and reopen it; granting it to python or adb does nothing. To tell "
+                    f"the two apart, try the default gateway: if it answers while every other address on "
+                    f"the subnet gives this error, it is the permission and not the TV. {see}")
         return f"could not reach {target} ({e}). Is the TV on and on this network? {see}"
     return None
 
@@ -194,8 +332,59 @@ def check_arity(args):
         sys.exit(2)
     if args and args[0] == "--screenshot":
         screenshot_args(args[1:])
+    elif args and args[0] in ("--push", "--pull"):
+        transfer_args(args)
     elif args and args[0].startswith("-") and args[0] not in ARITY:
         usage_error(f"not a flag of tv.py: {args[0]!r}")
+
+
+def transfer_args(args):
+    """Judge the two paths of --push/--pull before the TV is opened.
+
+    adb_shell opens the local path itself, so a path typed from the wrong folder was a
+    FileNotFoundError traceback that only started once the connection had been made: exit 1, the code
+    this script otherwise returns for a screenshot that came back empty, and not a word saying the run
+    had sent nothing. --pull writes to the name it is given, so a folder sitting there was
+    IsADirectoryError and a name in a folder that does not exist FileNotFoundError, both after the TV
+    had already been asked for the file - tools/b64push.py's own local path has been answered this way
+    since #1633. All of these are wrong before anything can be sent, so they are answered here, in the
+    words b64push.py uses, and the TV is never opened for them.
+
+    The two directions do not share one rule: a folder is a valid --push argument (adb_shell sends the
+    files inside it), while --pull needs a file name inside a folder that is there.
+    """
+    if len(args) != 3:      # check_arity has already answered the count
+        return
+    push = args[0] == "--push"
+    local, remote = (args[1], args[2]) if push else (args[2], args[1])
+    if push:
+        if not remote:
+            usage_error("--push needs the path on the TV to write to")
+        if not local:
+            usage_error("--push needs the local file to send")
+        if os.path.isdir(local):
+            return          # adb_shell pushes the files inside it
+        try:
+            # Opened, not read: adb_shell opens it the same way, and a 500 KB APK is not loaded to
+            # find out that it is not there.
+            with open(local, "rb"):
+                pass
+        except OSError as e:
+            path_error(f"cannot read {local}: {e.strerror or e}. Nothing was sent to the TV.")
+        return
+    if not remote:
+        usage_error("--pull needs the path on the TV to read")
+    if not local:
+        usage_error("--pull needs the local file to save to")
+    folder = os.path.dirname(os.path.abspath(local))
+    if not os.path.isdir(folder):
+        path_error(f"there is no folder {folder} for {local}: create it, or pull into a folder that is "
+                   f"there. Nothing was pulled.")
+    if os.path.isdir(local):
+        path_error(f"{local} is a folder, and --pull writes the file to the name it is given: give a "
+                   f"file name. Nothing was pulled.")
+    if os.path.exists(local) and not os.access(local, os.W_OK):
+        path_error(f"cannot write {local}: permission denied. Nothing was pulled.")
 
 
 def screenshot_args(rest):
@@ -237,6 +426,15 @@ def screenshot_args(rest):
 
 def usage_error(message):
     sys.stderr.write(f"{message}\n{USAGE}")
+    sys.exit(2)
+
+
+def path_error(message):
+    """Refuse a path that cannot be used, before anything is sent. Exit 2, no usage block.
+
+    The message already says which path and why; the usage block would only repeat two lines the
+    caller did type correctly."""
+    sys.stderr.write(f"{message}\n")
     sys.exit(2)
 
 

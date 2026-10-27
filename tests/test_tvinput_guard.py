@@ -53,6 +53,8 @@ class TvInputGuardTest(unittest.TestCase):
                 '  *resolve-activity*) echo "com.google.android.tvlauncher/.MainActivity" ;;\n'
                 '  *query-activities*) echo "  com.google.android.tvlauncher/.MainActivity" ;;\n'
                 '  *getprop*) echo 1 ;;\n'
+                # The read-back after the batch (#1376) answers nothing, so CAPTURE keeps the batch.
+                '  *"pm list packages -e"*) ;;\n'
                 # recovery.py --save and the batch: the batch is the last write, so CAPTURE holds it.
                 '  *) cat > "$CAPTURE" ;;\n'
                 "esac\n")

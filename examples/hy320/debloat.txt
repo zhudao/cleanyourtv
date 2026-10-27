@@ -2,14 +2,16 @@
 # Firmware be311-13 TQ2A.20250729 06:21:20.E1, 1280x720 panel, 213dpi.
 #
 # Apply:   TV_HOST=<tv ip> tools/disable.sh examples/hy320/debloat.txt
-# Undo:    TV_HOST=<tv ip> tools/restore.sh examples/hy320/debloat.txt
+# Undo:    TV_HOST=<tv ip> tools/restore.sh examples/hy320/debloat.txt com.htc.htclauncherhighenglishd08
 # Everything is DISABLED, not uninstalled. Comment out anything you use.
 #
 # Kept on purpose:
 # - com.htc.htcsettings: projector's own settings (Wi-Fi, picture, keystone)
-# - com.htc.htclauncherhighenglishd08: stock launcher, disabled by build-and-install.sh after
-#   the new launcher is installed and confirmed as Home. This firmware's Home key uses a custom
-#   HOME.JM category; the launcher's manifest was updated to handle it.
+# - com.htc.htclauncherhighenglishd08: stock launcher, disabled during setup. build-and-install.sh does
+#   not know it (it is not one of the stock launchers that script recognises), so run it with
+#   STOCK_LAUNCHER=none and set Home with cmd package set-home-activity. This firmware's Home key also
+#   carries a custom HOME.JM category, which the launcher in this repository does not declare: see the
+#   folder README and #1799.
 # - com.softwinner.tcorrection: projection/keystone settings
 # - com.droidlogic.updater: firmware updater (kept enabled; firmware updaters are better left on)
 # - com.droidlogic.tvinput: HDMI/input hardware layer (TV_INPUT_HARDWARE permission)

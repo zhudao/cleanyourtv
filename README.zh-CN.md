@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · 简体中文 · <a href="README.vi.md">Tiếng Việt</a> · <a href="README.ja.md">日本語</a> · <a href="README.it.md">Italiano</a>
+  <a href="README.md">English</a> · 简体中文 · <a href="README.zh-TW.md">正體中文</a> · <a href="README.vi.md">Tiếng Việt</a> · <a href="README.ja.md">日本語</a> · <a href="README.it.md">Italiano</a> · <a href="README.nl.md">Nederlands</a>
 </p>
 
 <p align="center">
@@ -18,6 +18,8 @@
 通过局域网连接 Android TV 或 Google TV，停用不需要的预装应用、广告和遥测服务，并在兼容设备上安装简洁的原生桌面。无需 root、刷机或 USB 数据线；清理工具采用停用方式，不卸载系统应用，并提供恢复脚本。
 
 本文介绍通用功能和使用方法。不同机型、地区和固件的应用包及限制可能不同，请先核对自己的设备。功能变化以[英文 README](README.md)为准，具体机型记录见[机型清单](examples/README.md)。
+
+**Samsung、LG、Roku 或其他非 Android 电视？** CleanYourTV 无法在这些电视上运行，但你仍可以用遥控器一步步关闭跟踪功能：[cleanyour.tv/not-android](https://cleanyour.tv/not-android)
 
 ![原生 Google TV 桌面与 CleanYourTV 桌面对比](docs/stock-vs-new-side.jpg)
 
@@ -95,7 +97,7 @@
 
 清理清单面向 **Android TV / Google TV**；当前桌面 APK 要求 **Android 8.0（API 26）或更高版本**。社区提供了多种电视与电视盒子的配置；其中一些设备运行的 Android 版本低于桌面的最低要求，清理清单不代表桌面可安装。请在[机型清单](examples/README.md)中核对型号、地区和固件，阅读对应目录的说明，再使用停用列表。
 
-- Samsung Tizen 和 LG webOS 不能直接运行本项目的 Android 桌面；[docs/devices/samsung-tizen.md](docs/devices/samsung-tizen.md) 记录了一台 2021 年 Tizen 机型在局域网里暴露的接口（没有 ADB，因而无法停用应用），社区移植项目可参考[社区作品](SHOWCASE.md)。
+- Samsung Tizen 和 LG webOS 不能直接运行本项目的 Android 桌面；[docs/devices/samsung-tizen.md](docs/devices/samsung-tizen.md) 记录了一台 2021 年 Tizen 机型在局域网里暴露的接口（没有 ADB，因而无法停用应用），社区移植项目可参考[社区作品](SHOWCASE.md)。如需在 Samsung、LG、Roku 等非 Android 电视上关闭跟踪功能，请看 [cleanyour.tv/not-android](https://cleanyour.tv/not-android)。
 - Fire TV 的清理记录可供手动适配；[操作提示词](PROMPT.md)不适用于 Fire TV，Fire OS 也限制替换默认桌面。
 - 部分中国大陆版电视会拒绝侧载 APK 或安装第三方 HOME 桌面，已记录的 TCL 机型只是其中的例子。不能仅凭品牌判断兼容性。
 - 没有现成清单时，可以让助手检查实际设备，并按[贡献指南](CONTRIBUTING.md)提交经过验证的机型记录。

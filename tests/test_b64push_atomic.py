@@ -126,7 +126,7 @@ class B64PushTest(TempDirTest):
         target.write_bytes(b"old contents")
         result = self.push(str(self.local(os.urandom(5000))), str(target), FAKE_CORRUPT="1")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("MISMATCH", result.stdout)
+        self.assertIn("MISMATCH", result.stderr)
         self.assertEqual(target.read_bytes(), b"old contents")
         self.assertEqual(sorted(p.name for p in self.remote_dir.iterdir()), ["file.apk"])
 

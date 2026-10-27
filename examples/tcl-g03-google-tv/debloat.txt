@@ -62,8 +62,10 @@
 #   the network and try again" while the network is fine (logcat: "dnum is null!"). If you turned it off, to check for an update enable it,
 #   reboot once, run the check, then disable it again (docs/TROUBLESHOOTING.md).
 # - com.google.android.apps.tv.dreamx is more than the promo screensaver: it also hosts Google TV's Google Home panel
-#   (SmartHomeMainActivity: lights and other devices in the quick settings). Disabling it removes that panel. Keep it
-#   enabled if the household uses Google Home lights from the TV.
+#   (SmartHomeMainActivity: lights and other devices in the quick settings). Disabling it removes that panel. It also
+#   loads the panel's account through com.google.android.apps.tv.launcherx, so with launcherx off the panel opens and
+#   closes at once: if the household uses Google Home lights, keep launcherx enabled as well and hand Home to the new
+#   launcher with stock_home_redirect (docs/TROUBLESHOOTING.md, #1653).
 # - Apps only mode (Settings > Accounts & Sign In > account) also hides the Google Home panel on this firmware.
 #
 # DO NOT DISABLE: com.tcl.tv, com.tcl.tvinput (Live TV, tuner, HDMI/AV), com.tcl.suspension (Quick panel and the

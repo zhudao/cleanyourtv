@@ -33,6 +33,8 @@ class SetupwraithGuardTest(unittest.TestCase):
                 # The Home guard asks which app owns Home and which ones answer it.
                 '  *resolve-activity*) echo "com.google.android.tvlauncher/.MainActivity" ;;\n'
                 '  *query-activities*) echo "  com.google.android.tvlauncher/.MainActivity" ;;\n'
+                # The read-back after the batch (#1376) answers nothing, so CAPTURE keeps the batch.
+                '  *"pm list packages -e"*) ;;\n'
                 '  *) cat > "$CAPTURE" ;;\n'
                 'esac\n')
             client.chmod(0o755)

@@ -12,10 +12,12 @@ build-and-install.sh, or the steps in addons/README.md; tools/theme.sh for theme
     TV_HOST=<tv ip> tools/venv/bin/python -I tools/manage.py set <switch> <json value> --theme <your theme folder>
 
 install on an installed add-on updates it (pm install -r). set writes the key into a theme folder of your own and
-pushes it with tools/theme.sh, as themes/README.md describes; it never edits the project's themes. set reads the
-value the way the key's own type in the Keys table needs - true or false for a bool, a JSON list, object or number
-where the table says so, the text itself for a string - and refuses one the launcher would ignore or a number
-outside the range the table states.
+pushes it with tools/theme.sh, as themes/README.md describes; it never edits a folder in this checkout, so pointing
+--theme at the project's themes/ or examples/ is refused before anything is written. set reads the value the way
+the key's own type in the Keys table needs - true or false for a bool, a JSON list, object or number where the
+table says so, the text itself for a string - and refuses one the launcher would ignore or a number outside the
+range the table states. A theme's config.json is hand-edited, so one that cannot be read, is not JSON, or is not a
+JSON object is named before the key is written, and a write it cannot make says so instead of ending in a traceback.
 """
 import json
 import math
@@ -221,6 +223,66 @@ def value_as(key, item, text):
     return parsed
 
 
+# ---------------------------------------------------------------- the theme folder set writes into
+
+# Both folders hold config.json files this checkout ships and its tests hold to the launcher's readers
+# (tests/test_shipped_config_values.py): a theme author who pointed --theme at one would rewrite a tracked
+# file, and the edit would ride along in their next pull request.
+PROJECT_FOLDERS = ("themes", "examples")
+
+
+def reason(error):
+    """The short reason from an OSError or a decoding error, without the errno prefix Python repeats."""
+    return getattr(error, "strerror", None) or str(error)
+
+
+def json_kind(value):
+    """What a parsed JSON value is, in the words a reader would use."""
+    for kind, name in ((bool, "a boolean"), (list, "an array"), (str, "a string"), (int, "a number"),
+                       (float, "a number"), (type(None), "null")):
+        if isinstance(value, kind):
+            return name
+    return type(value).__name__
+
+
+def own_folder_problem(folder):
+    """Why set may not write into `folder`, or None: it is one of the folders this checkout ships, or a file."""
+    for name in PROJECT_FOLDERS:
+        project = ROOT / name
+        if folder == project or project in folder.parents:
+            return (f"{folder} is inside this checkout's {name}/: set writes into a theme folder of your own, "
+                    f"so copy one somewhere else first. Nothing was written or pushed.")
+    if folder.exists() and not folder.is_dir():
+        return f"{folder} is a file, not a folder: --theme takes a theme folder of your own."
+    return None
+
+
+def theme_config(folder):
+    """(data, problem): the theme folder's config.json as an object, or why set cannot use it.
+
+    The file is the owner's own, hand-edited and pushed by tools/theme.sh, so the ways it can be unreadable are
+    the owner's next problem to fix: a comma left after the last key, a list where the launcher reads an object,
+    a file saved in another encoding. Each is named with its path before the key is written, and nothing is
+    pushed, rather than a JSONDecodeError traceback from halfway through the command.
+    """
+    path = folder / "config.json"
+    if not path.is_file():
+        return {}, None            # a folder of their own with no config.json yet: set starts the file
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as e:
+        return {}, f"cannot read {path}: {reason(e)}. Nothing was written or pushed."
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        return {}, (f"{path} is not valid JSON ({e}); fix it, then run set again. "
+                    f"Nothing was written or pushed.")
+    if not isinstance(data, dict):
+        return {}, (f"{path} holds {json_kind(data)}, not a JSON object, and a theme's config.json is an object "
+                    f"of keys. Nothing was written or pushed.")
+    return data, None
+
+
 # ---------------------------------------------------------------- the TV
 
 def tv_python():
@@ -353,14 +415,22 @@ def cmd_set(key, value, theme_folder):
     if not item or item["kind"] != "switch":
         sys.exit(f"no switch called {key}")
     folder = Path(theme_folder).resolve()
-    if ROOT / "themes" in folder.parents or folder == ROOT / "themes":
-        sys.exit("use a theme folder of your own, not one of the project's (copy one first)")
+    problem = own_folder_problem(folder)
+    if problem:
+        sys.exit(problem)
+    data, problem = theme_config(folder)
+    if problem:
+        sys.exit(problem)
     parsed = value_as(key, item, value)   # before the file is written or anything is pushed
-    f = folder / "config.json"
-    data = json.loads(f.read_text(encoding="utf-8")) if f.is_file() else {}
     data[key] = parsed
-    folder.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    f = folder / "config.json"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    except OSError as e:
+        # A folder that is read-only, a path with a file in the middle of it, a full disk: the key is not
+        # written and the theme on the TV is untouched, so say which file and why rather than a traceback.
+        sys.exit(f"cannot write {f}: {reason(e)}. Nothing was pushed.")
     print(f"{key} = {json.dumps(parsed)} in {f}")
     return run(["bash", str(TOOLS / "theme.sh"), str(folder)], ROOT)
 

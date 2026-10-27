@@ -9,8 +9,8 @@ replaced by a stand-in that keeps what `tools/tv.py --batch` was given.
 examples/anker-nebula-mars-3-air: the header and README said `tools/check.py --fix` re-disables
 Assistant after a boot, but the list keeps com.google.android.katniss commented out and check.py reads
 only active lines, so --fix never touched it. They now say to uncomment it and its LED service, then
-run Apply again: check.py --fix never writes the recovery record, and restore.sh leaves alone every
-listed name the record does not hold, so only disable.sh can make Undo bring them back. The owner's
+run Apply again: disable.sh adds them to the recovery record first, and restore.sh leaves alone every
+listed name the record does not hold, so that is what makes Undo bring them back. The owner's
 choice stays: the shipped list still leaves Assistant on. That half reuses the drift check's harness and
 fake tools/tv.py from tests/test_drift_check.py, and runs the real disable.sh and restore.sh against
 it with run_script from tests/test_recovery_record.py.
@@ -167,12 +167,11 @@ class AnkerAssistantTest(unittest.TestCase):
         self.assertEqual(self.sent(), [f"pm disable-user --user 0 {name}" for name in ASSISTANT])
 
     def test_undo_brings_assistant_back_after_the_header_steps(self):
-        # check.py --fix applies the list without touching the recovery record, and restore.sh leaves
-        # alone every listed name the record does not hold, so a package only check.py disabled stays
-        # off after Undo. disable.sh adds the names a list gained to the record before disabling them.
+        # restore.sh leaves alone every listed name the recovery record does not hold, and disable.sh
+        # adds the names a list gained to the record before disabling them.
         names = self.told_to_uncomment()
         told = self.paragraph.split("uncomment", 1)[1].split("check.py", 1)[0]
-        self.assertIn("run Apply again", told, "only disable.sh records the uncommented lines for Undo")
+        self.assertIn("run Apply again", told, "Apply records the uncommented lines for Undo")
         lines = header(ANKER / "debloat.txt")
         apply = next(line for line in lines if line.startswith("# Apply:"))
         undo = next(line for line in lines if line.startswith("# Undo:"))

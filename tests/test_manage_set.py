@@ -207,5 +207,150 @@ class SetValueTest(unittest.TestCase):
         self.assertIn("return i < min || i > max ? fallback : i;", config)
 
 
+class SetThemeFolderTest(unittest.TestCase):
+    """set writes into the owner's theme folder: one it cannot read, or one this checkout ships, is refused.
+
+    themes/README.md sends a theme author to write config.json by hand, so the file set reads is a hand-edited
+    one: a comma left after the last key, a list where the launcher reads an object, a file saved by an editor
+    in another encoding. Each of those was a traceback from halfway through set, and `--theme examples/<model>`
+    rewrote a tracked config.json and pushed it (tests/test_shipped_config_values.py holds those files to the
+    launcher's readers, so the edit could also fail CI in an unrelated pull request).
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.theme = Path(self.tmp.name) / "my-theme"
+        self.theme.mkdir()
+        self.config = self.theme / "config.json"
+        patcher = mock.patch.object(manage, "run")
+        self.push = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def set_key(self, key="dock_band", value="true", folder=None):
+        """Runs set the way main() does; returns the refusal text, or None when the value was written."""
+        try:
+            with mock.patch("sys.stdout"):
+                manage.cmd_set(key, value, str(folder or self.theme))
+        except SystemExit as stop:
+            return str(stop.code)
+        return None
+
+    def test_utf8_themes_keep_other_keys_with_or_without_a_bom(self):
+        original = {
+            "greeting_name": "客廳 Trịnh",
+            "columns": 6,
+            "custom": {"label": "夜晚", "values": [True, None, {"amount": 7}]},
+            "dock_band": False,
+        }
+        text = json.dumps(original, ensure_ascii=False, indent=2) + "\n"
+        for encoding in ("utf-8", "utf-8-sig"):
+            for newline in ("\n", "\r\n"):
+                with self.subTest(encoding=encoding, newline=newline):
+                    self.config.write_bytes(text.replace("\n", newline).encode(encoding))
+                    self.push.reset_mock()
+                    self.assertIsNone(self.set_key("dock_band", "true"))
+                    written = self.config.read_bytes()
+                    self.assertFalse(written.startswith(b"\xef\xbb\xbf"))
+                    updated = json.loads(written.decode("utf-8"))
+                    self.assertIs(updated["dock_band"], True)
+                    self.assertEqual(updated, dict(original, dock_band=True))
+                    self.push.assert_called_once_with(
+                        ["bash", str(manage.TOOLS / "theme.sh"), str(self.theme.resolve())], manage.ROOT)
+
+    def test_a_config_json_that_is_not_json_is_named_and_left_alone(self):
+        self.config.write_text('{"greeting_name": "Old",}\n', encoding="utf-8")
+        before = self.config.read_bytes()
+        refusal = self.set_key()
+        self.assertIn(str(self.config), refusal)
+        self.assertIn("is not valid JSON", refusal)
+        self.assertIn("Nothing was written or pushed", refusal)
+        self.assertEqual(before, self.config.read_bytes(), "a refused theme must not be rewritten")
+        self.push.assert_not_called()
+
+    def test_a_config_json_that_is_not_an_object_is_named(self):
+        for text, kind in (("[1, 2]", "an array"), ('"a theme"', "a string"), ("12", "a number"),
+                           ("null", "null"), ("true", "a boolean")):
+            with self.subTest(config=text):
+                self.config.write_text(text, encoding="utf-8")
+                refusal = self.set_key()
+                self.assertIn(f"holds {kind}", refusal)
+                self.assertIn("not a JSON object", refusal)
+                self.assertEqual(text, self.config.read_text(encoding="utf-8"), "a refused theme must not be rewritten")
+                self.push.assert_not_called()
+
+    def test_a_config_json_in_another_encoding_is_named(self):
+        # A file an editor saved as UTF-16, the way a Windows editor does by default for "Unicode".
+        self.config.write_bytes('{"greeting_name": "Old"}'.encode("utf-16"))
+        before = self.config.read_bytes()
+        refusal = self.set_key()
+        self.assertIn(f"cannot read {self.config.resolve()}", refusal)
+        self.assertIn("Nothing was written or pushed", refusal)
+        self.assertEqual(before, self.config.read_bytes())
+        self.push.assert_not_called()
+
+    def test_a_theme_that_is_a_file_is_named(self):
+        afile = Path(self.tmp.name) / "not-a-theme"
+        afile.write_text("", encoding="utf-8")
+        refusal = self.set_key(folder=afile)
+        self.assertIn(f"{afile} is a file, not a folder", refusal)
+        self.push.assert_not_called()
+
+    def test_a_write_it_cannot_make_is_named(self):
+        # A file in the middle of the path: mkdir cannot create a folder under one.
+        afile = Path(self.tmp.name) / "not-a-folder"
+        afile.write_text("", encoding="utf-8")
+        refusal = self.set_key(folder=afile / "theme")
+        self.assertIn("cannot write", refusal)
+        self.assertIn("config.json", refusal)
+        self.assertIn("Nothing was pushed", refusal)
+        self.push.assert_not_called()
+
+    def test_a_folder_this_checkout_ships_is_refused(self):
+        # A checkout of its own, so the project's real files are never touched by this test.
+        # Resolved like manage.ROOT is, so a temporary folder behind a symlink (/var on macOS) still compares.
+        root = (Path(self.tmp.name) / "checkout").resolve()
+        for name in manage.PROJECT_FOLDERS:
+            (root / name / "shipped").mkdir(parents=True)
+            (root / name / "shipped" / "config.json").write_text('{"greeting_name": "Shipped"}\n', encoding="utf-8")
+        patcher = mock.patch.object(manage, "ROOT", root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for name in manage.PROJECT_FOLDERS:
+            folder = root / name / "shipped"
+            before = (folder / "config.json").read_bytes()
+            with self.subTest(project=name):
+                refusal = self.set_key(folder=folder)
+                self.assertIn(f"inside this checkout's {name}/", refusal)
+                self.assertIn("Nothing was written or pushed", refusal)
+                self.assertEqual(before, (folder / "config.json").read_bytes(),
+                                 "set must not rewrite a config.json the checkout ships")
+                self.push.assert_not_called()
+        # The guard is about where the file is, not about being careful: a folder of the owner's own is written.
+        mine = root / "my-theme"
+        mine.mkdir()
+        self.assertIsNone(self.set_key(folder=mine))
+        self.assertIs(json.loads((mine / "config.json").read_text(encoding="utf-8"))["dock_band"], True)
+
+    def test_every_folder_that_ships_a_config_json_is_one_set_refuses(self):
+        # A third kind of folder with a config.json in it (a new add-on contract, say) has to be added to
+        # PROJECT_FOLDERS, or set would rewrite it the way examples/ used to be rewritable.
+        shipped = {}
+        for path in sorted(ROOT.glob("*/*/config.json")):
+            shipped.setdefault(path.relative_to(ROOT).parts[0], set()).add(path)
+        self.assertGreaterEqual(sum(len(v) for v in shipped.values()), 60, "no config.json files were found")
+        self.assertEqual({"examples", "themes"}, set(shipped), "a folder with a config.json that set does not guard")
+        self.assertEqual(set(shipped), set(manage.PROJECT_FOLDERS))
+
+
+    def test_the_page_that_hands_out_set_names_the_refusal(self):
+        # themes/README.md is where a theme author meets `set`: a refusal they were not told about costs them
+        # a run against a TV.
+        page = (ROOT / "themes" / "README.md").read_text(encoding="utf-8")
+        self.assertIn("outside this checkout", page)
+        for name in manage.PROJECT_FOLDERS:
+            self.assertIn(f"`{name}/`", page)
+
+
 if __name__ == "__main__":
     unittest.main()

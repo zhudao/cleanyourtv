@@ -91,6 +91,14 @@ class RelayTest(unittest.TestCase):
         self.assertIn(f"TV_HOST=127.0.0.1 TV_PORT={port}", proc.stdout.readline())
         return proc, port, first
 
+    def run_relay(self, *args, timeout=10):
+        """Run the relay with ARGS to the end; a relay that starts instead of refusing an argument is a failure."""
+        try:
+            return subprocess.run([sys.executable, str(ROOT / "tools" / "relay.py"), *args],
+                                  env=env_with(), capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.fail(f"relay.py {' '.join(args)} started a relay instead of refusing the argument")
+
     def test_bytes_go_both_ways(self):
         tv = echo_server()
         self.addCleanup(tv.close)
@@ -198,6 +206,39 @@ class RelayTest(unittest.TestCase):
         # A TV_PORT that is not a relay's is the TV's, as for tv.py: TV_PORT=5877 relay.py <tv ip>.
         tv_port = self.stand_in_tv()
         self.assert_reaches(tv_port, "127.0.0.1", env=env_with(TV_PORT=str(tv_port)))
+
+    def test_a_local_port_that_is_not_a_port_is_refused(self):
+        # --port went to bind() as typed, and bind() answers a port above 65535 (or a negative one) with an
+        # OverflowError, which is not an OSError: the "cannot listen on 127.0.0.1:PORT" line below never saw
+        # it, so choosing a port by mistake was a traceback with exit 1.
+        for value in ("65536", "70000", "-1"):
+            with self.subTest(port=value):
+                result = self.run_relay("192.0.2.1", "--port", value)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(f"--port: not a port number: {value}", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(result.stdout, "")
+
+    def test_a_tv_port_that_is_not_a_port_is_refused(self):
+        # --tv-port skipped the 1..65535 check the address and TV_PORT get (a few lines above in relay.py), so
+        # it reached socket.create_connection, which cuts a servname to 16 bits: --tv-port 70000 printed
+        # "-> <tv>:70000" and forwarded to <tv>:4464, some other service on the TV, and 0 or 65536 became port
+        # 0. A port the relay cannot forward to is refused before it listens, as the address's port is.
+        for value in ("0", "-1", "65536", "70000", "131072"):
+            with self.subTest(port=value):
+                result = self.run_relay("192.0.2.1", "--tv-port", value)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(f"--tv-port: not a port number: {value}", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(result.stdout, "")
+
+    def test_the_ends_of_the_port_range_are_still_ports(self):
+        # 1 and 65535 are ports and neither option may refuse them; --port keeps 0, which picks a free one and
+        # is what every other test here starts a relay with.
+        for value in ("1", "65535"):
+            with self.subTest(port=value):
+                _, _, first = self.launch("192.0.2.1", "--tv-port", value, "--port", "0", env=env_with())
+                self.assertIn(f"-> 192.0.2.1:{value}\n", first)
 
     def test_a_port_that_is_not_a_number_is_refused(self):
         for args, env in ((["127.0.0.1:55a5"], env_with()), (["127.0.0.1:70000"], env_with()),

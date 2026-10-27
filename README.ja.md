@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.vi.md">Tiếng Việt</a> · 日本語 · <a href="README.it.md">Italiano</a>
+  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">正體中文</a> · <a href="README.vi.md">Tiếng Việt</a> · 日本語 · <a href="README.it.md">Italiano</a> · <a href="README.nl.md">Nederlands</a>
 </p>
 
 <p align="center">
@@ -23,6 +23,9 @@
 この文書では共通の機能と使い方を紹介します。機種、地域、ファームウェアによってアプリの構成や制限は異なるため、
 まずお使いのテレビと照らし合わせてください。変更があった場合は[英語版 README](README.md) が正となります。
 機種ごとの記録は[機種リスト](examples/README.md)にあります。
+
+**Samsung、LG、Roku など Android 以外のテレビをお使いですか？** CleanYourTV は動きませんが、リモコンで
+順番に操作してトラッキングをオフにできます: [cleanyour.tv/not-android](https://cleanyour.tv/not-android)
 
 ![標準の Google TV ホームと CleanYourTV ランチャーの比較](docs/stock-vs-new-side.jpg)
 
@@ -118,7 +121,8 @@ Android アプリは、マウスやタッチ操作が必要な場合がありま
 - Samsung Tizen と LG webOS では、このプロジェクトの Android ランチャーは動きません。
   [docs/devices/samsung-tizen.md](docs/devices/samsung-tizen.md) には、2021 年製の Tizen テレビがローカルネットワークで
   何を公開しているかを記録しています（ADB がないため、アプリの無効化はできません）。コミュニティによる他プラットフォームへの
-  移植は[コミュニティのプロジェクト](SHOWCASE.md)にあります。
+  移植は[コミュニティのプロジェクト](SHOWCASE.md)にあります。Samsung、LG、Roku など Android 以外のテレビで
+  トラッキングをオフにする手順は [cleanyour.tv/not-android](https://cleanyour.tv/not-android) にあります。
 - Fire TV には手作業で進めるための無効化メモがあります。[アシスタント用プロンプト](PROMPT.md)は Fire TV には使えず、
   Fire OS ではデフォルトのホーム画面を変更できません。
 - 中国本土で販売されている一部のテレビは、外部 APK やサードパーティのランチャーのインストールを拒否します。

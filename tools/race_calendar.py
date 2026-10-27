@@ -12,8 +12,9 @@ season starts. Races that are already over are left out. The theme folder has to
 created if it is not there yet).
 
 Exit status: 0 the calendar is in the theme, 1 the season has no race left to show, 2 this run could not do
-its job - the folder is not there, --season is not a year, or the fetch failed - and says why on stderr.
-Nothing is written on 1 or 2: the theme stays as it was.
+its job - the folder is not there, its config.json is not the JSON object a theme has (or cannot be read or
+written), --season is not a year, or the fetch failed - and says why on stderr. Nothing is written on 1 or
+2: the theme stays as it was.
 """
 import argparse
 import datetime
@@ -104,7 +105,31 @@ def main():
                       f"folder of its own under themes/, so check the name you passed - this run will not "
                       f"create one for you.")
     config = folder / "config.json"
-    theme = json.loads(config.read_text(encoding="utf-8-sig")) if config.is_file() else {}
+    # The theme's own config.json is hand-written, and it was the one input this script still answered
+    # with a traceback: a trailing comma ended the run in `JSONDecodeError` with exit 1, which is the
+    # code this script keeps for a real answer ("this season has no race left to show", where it sends
+    # the reader to --season next year), so a typo in their own file read as a season with nothing left.
+    # Three shapes of that file are refused here, before the fetch: a path that is not a file (a stray
+    # copy of the folder), text that is not JSON as UTF-8, and JSON that is not an object - `[1, 2]`
+    # parsed fine and then met `theme["race_calendar"]` with a TypeError.
+    if config.exists() and not config.is_file():
+        return refuse(f"{config} is not a file. Nothing was written: a theme's config.json is one JSON "
+                      f"object, so move whatever sits at that path aside and run it again.")
+    try:
+        theme = json.loads(config.read_text(encoding="utf-8-sig")) if config.is_file() else {}
+    except ValueError as e:
+        return refuse(f"{config} is not the JSON a theme's config.json has to be, as UTF-8 ({e}). Nothing "
+                      f"was written: fix the file - a trailing comma or a missing brace is the usual cause "
+                      f"- or move it aside, and run it again.")
+    except OSError as e:
+        return refuse(f"could not read {config} ({e.strerror or e}). Nothing was written: check the "
+                      f"folder's permissions and run it again.")
+    if not isinstance(theme, dict):
+        kind = {list: "array", str: "string", bool: "true/false", int: "number", float: "number",
+                type(None): "null"}.get(type(theme), type(theme).__name__)
+        return refuse(f"{config} holds a JSON {kind}, not an object. Nothing was written: "
+                      f"a theme's config.json is one JSON object of keys, so wrap it in {{}} or start the "
+                      f"file again and run it.")
     endpoint = API.format(season=args.season)
     request = urllib.request.Request(endpoint, headers={"User-Agent": "cleanyourtv"})
     # The one online step in this repository, on a laptop that may be offline, behind a proxy that
@@ -140,7 +165,17 @@ def main():
                          f"year\n")
         return 1
     theme["race_calendar"] = races
-    config.write_text(json.dumps(theme, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    text = json.dumps(theme, indent=2, ensure_ascii=False) + "\n"
+    # The write is the other half of the same file, and a write that could not start (a read-only
+    # checkout, a folder of another user's, config.json a symlink into a folder that is not there) used
+    # to be an OSError traceback with exit 1, after the fetch - so a run that did nothing reported the
+    # code this script keeps for an answer.
+    try:
+        config.write_text(text, encoding="utf-8")
+    except OSError as e:
+        return refuse(f"could not write {config} ({e.strerror or e}). The {table['season']} calendar was "
+                      f"fetched but is not in the theme: check the folder's permissions, or move what is "
+                      f"at that path aside, and run it again.")
     first = races[0]
     print(f"{len(races)} races from the {table['season']} season -> {config}")
     print(f"next: round {first['round']} {first['name']}, race {first['sessions'][-1]['start']}")

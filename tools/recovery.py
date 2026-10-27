@@ -11,8 +11,9 @@ before. Both scripts now go through this record: `disable.sh` writes it before t
 reaches the TV, and `restore.sh` replays it.
 
 Records live in ~/.cleanyourtv/, one per TV and list. The first one wins: a retry after a
-half-applied list must not record the broken state as the original. A later run only adds the names
-the list gained since then, with their state before this list disabled them.
+half-applied list must not record the broken state as the original. A later run, and check.py --fix,
+only add the names the list gained since then, with their state before this list disabled them, and
+record a package that was absent then and is installed and enabled now as enabled.
 """
 import hashlib
 import ipaddress
@@ -62,7 +63,17 @@ def read_list(path):
     A BOM and CRLF from a Windows editor are dropped, as is a trailing `# note`; anything that is not
     a bare package name stops the run before the TV is touched.
     """
-    text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+    # A list that cannot be read is the same mistake as a bad name further down it - a typo, or a
+    # folder a git pull moved - and it is answered the same way: one line naming the path, before any
+    # of the plan is printed and so before tools/tv.py --batch has a command to send. Left to
+    # Path.read_text it was a 17-line traceback through pathlib: that is what `tools/restore.sh
+    # <typo>` printed for the undo, while `tools/disable.sh <typo>` already said "cannot read the
+    # list: <path>". OSError covers a missing file, a directory and a path with a file in the middle.
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as e:
+        raise SystemExit(f"could not read {path} ({e.strerror or e}). Nothing was sent to the TV: "
+                         f"pass the debloat list, e.g. examples/<your tv>/debloat.txt")
     names = []
     for number, line in enumerate(text.splitlines(), 1):
         line = line.split("#", 1)[0].strip()
@@ -185,7 +196,8 @@ def load_record(path):
     # would lose that: restore would then enable every listed package, and a new disable.sh run would
     # record the TV after cleanup as the original. So the chooser and that one entry are dropped here,
     # which reads the record the way save() writes it now. Any other bad name is still refused below,
-    # and save() writes the record back this way only when the list has gained names.
+    # and extend_record() (from save() and check.py --fix) writes the record back this way only when the
+    # list has gained names or a package recorded absent has since arrived.
     home = record.get("home")
     if isinstance(home, str) and HOME_RE.fullmatch(home) and is_chooser(home):
         record["packages"].pop(home.split("/", 1)[0], None)
@@ -298,18 +310,50 @@ def package_state(name, installed, disabled):
             else "enabled")
 
 
+def extend_record(path, record, names, installed, disabled):
+    """Bring an existing record up to date before the list is applied to the TV again.
+
+    save() runs this for disable.sh, and check.py --fix runs it before it disables anything, because
+    restore puts back only what the record holds. The list may have been edited since the record was
+    taken. Entries already in the record are never overwritten (a retry must not record the broken
+    state as the original), but names it does not hold yet have not been touched by this list, so
+    their state now is their state before cleanup. So is the state of a package recorded as absent
+    that is installed and enabled now: an update or the Play Store put it there after the record was
+    taken. Without them, restore would leave those packages disabled for good. One that is installed
+    but disabled stays absent, as nobody can say what disabled it, and restore leaves both alone.
+    The file is written only when something changed. Returns the names added and the ones that
+    arrived.
+    """
+    states = record["packages"]
+    arrived = [name for name in names if states.get(name) == "absent"
+               and package_state(name, installed, disabled) == "enabled"]
+    added = [name for name in names if name not in states]
+    for name in added:
+        states[name] = package_state(name, installed, disabled)
+    for name in arrived:
+        states[name] = "enabled"
+    if not added and not arrived:
+        return added, arrived
+    write_record(path, record)
+    if added:
+        print(f"added {len(added)} names the list gained since then to the recovery record: "
+              f"{', '.join(added)}")
+    if arrived:
+        print(f"recorded {len(arrived)} as enabled, absent when the record was taken and installed "
+              f"since: {', '.join(arrived)}")
+    print("every other entry keeps the state from before the first run.")
+    return added, arrived
+
+
 def save(list_path, host):
     path = find_record(list_path, host)
     if path.exists():
         record = load_record(path)
         packages = read_list(list_path)
-        # The list may have been edited since the record was taken. Entries already in the record are
-        # never overwritten (a retry must not record the broken state as the original), but names it
-        # does not hold yet have not been touched by this list, so their state now is their state
-        # before cleanup. Without them, restore would leave those packages disabled for good.
-        added = [name for name in packages if name not in record["packages"]]
         print(f"keeping the recovery record from {record.get('created')}: {path}")
-        if not added:
+        # Only a name the record does not hold, or holds as absent, can change it (extend_record), and
+        # only then is the TV asked.
+        if all(record["packages"].get(name, "absent") != "absent" for name in packages):
             print("nothing was recorded again: it holds the state from before the first run.")
             return 0
         dev = connect()
@@ -317,11 +361,9 @@ def save(list_path, host):
             installed, disabled = query_packages(dev)
         finally:
             dev.close()
-        for name in added:
-            record["packages"][name] = package_state(name, installed, disabled)
-        write_record(path, record)
-        print(f"added {len(added)} names the list gained since then, entries already recorded "
-              f"are unchanged: {', '.join(added)}")
+        added, arrived = extend_record(path, record, packages, installed, disabled)
+        if not added and not arrived:
+            print("nothing was recorded again: it holds the state from before the first run.")
         return 0
 
     packages = read_list(list_path)
@@ -434,8 +476,9 @@ def restore_commands(list_path, stock, host):
             commands.append(f"settings put global {key} {value}")
         else:
             sys.stderr.write(f"  skipping {key}: the record holds {value!r}, not a number\n")
-    # disable.sh adds names the list gained to the record before disabling them, so a name still
-    # missing here was added after the last disable run and never disabled by it: leave it alone.
+    # disable.sh and check.py --fix add names the list gained to the record before disabling them, so
+    # a name still missing here was added after the last of those runs and never disabled by it:
+    # leave it alone.
     edited = [name for name in packages if name not in states]
     if edited:
         sys.stderr.write(f"not in the record, leaving alone: {', '.join(edited)}\n")

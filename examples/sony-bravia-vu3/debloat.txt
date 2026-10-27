@@ -10,6 +10,10 @@
 # HDMI/AV inputs continued to work. This list is for the recorded product/build; verify your own TV.
 # Stock launcher: com.google.android.apps.tv.launcherx. The custom launcher was installed and confirmed
 # as Home before this package was disabled; restore.sh takes the stock launcher package above.
+# Second unit (same product and build, India, 25 October 2026): with launcherx disabled the remote's Netflix,
+# YouTube, Prime Video and YouTube Music buttons do nothing, because Realtek's GlobalKeyReceiver hands them to
+# launcherx. Keeping launcherx with stock_home_redirect and key_filter false kept both the buttons and the
+# volume ramp; see README.md in this folder.
 # Live TV: com.android.tv. Keep the Realtek input/tuner packages com.realtek.dtv, com.realtek.tv.atv,
 # com.realtek.tv.passthrough and Sony's com.sony.dtv.smartui (the input menu).
 # Kept during the session: streaming apps, Assistant, Chromecast, AirPlay, Play Store/Services, and

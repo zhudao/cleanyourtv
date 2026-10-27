@@ -195,6 +195,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private TextView raceKicker, raceHeadline, raceSessions;
     /** config.xml show_stats, overridable by a theme. Off: the line is gone and nothing is read. */
     private boolean showStats;
+    /** config.xml inputs_connected_only: the Inputs menu lists only connected inputs, the rest behind "More inputs". */
+    private boolean inputsConnectedOnly;
     private boolean shamsi;
     /** greeting_name: said after the greeting, which is shown in capitals. */
     private String greetingName = "";
@@ -381,6 +383,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
     };
 
+    private java.util.Map<Integer, String> homeAppKeys = java.util.Collections.emptyMap();
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -388,6 +392,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         density = getResources().getDisplayMetrics().density;
         // config.xml, overlaid by config.json from a pushed theme (see Config and tools/theme.sh).
         Config cfg = Config.load(this);
+        homeAppKeys = RemoteKeys.parseAppKeys(cfg.appKeys);
         appLibrarySelection = cfg.appLibrarySelection;
         libraryOkOpens = cfg.libraryOkOpens;
         // restore_key_services: after a force stop, put back the remote's accessibility helpers that Android took
@@ -492,6 +497,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         raceHeadline = findViewById(R.id.raceHeadline);
         raceSessions = findViewById(R.id.raceSessions);
         showStats = cfg.showStats;
+        inputsConnectedOnly = cfg.inputsConnectedOnly;
         shamsi = cfg.shamsiDate;
         lunarDate = findViewById(R.id.lunarDate);
         lunar = cfg.lunarDate;
@@ -1253,6 +1259,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        // Vendor keys (TCL Netflix button, 4062) never reach the key services, only the focused window.
+        if (event.getKeyCode() >= 1000 && RemoteKeys.handle(this, event, homeAppKeys.get(event.getKeyCode()), null)) return true;
         if (handleSettingsKey(event)) return true;
         if (tileMenuEnabled && !reordering && openPopup == null && cardPrompt == null
                 && event.getKeyCode() == KeyEvent.KEYCODE_MENU) {
@@ -1772,6 +1780,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         } else {
             hero.setY(y);
+            // onPause cancels the fade-ins, and a second Home during one lands on the same tile, which starts none:
+            // finish them, or the shelf and the glow stay dim until focus moves to another app.
+            if (hero.getAlpha() < 1f) hero.animate().alpha(1f).setDuration(260).start();
+            if (ambientGlow && color == ambientColor && ambient.getAlpha() < 1f) {
+                ambient.animate().alpha(1f).setDuration(600).start();
+            }
         }
     }
 
@@ -3002,6 +3016,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         final PopupWindow popup = glassPopup(panel, width);
 
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
+        // inputs_connected_only: ports without a connected device and the AV jacks fold behind a "More inputs" row.
+        boolean connectedOnly = inputsConnectedOnly;
+        List<View> folded = new ArrayList<>();
         boolean sawNonHdmi = false;
         String tunerId = null;
         boolean tunerIsHw = false;
@@ -3073,7 +3090,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 if (hdmi && !label.toUpperCase(Locale.ROOT).contains("HDMI")) label = "HDMI " + label;
                 CharSequence custom = InputNames.tidy(info.loadCustomLabel(this));
                 boolean named = custom != null && custom.length() > 0 && !custom.toString().equals(label);
-                if (!hdmi && rows.getChildCount() > 0 && !sawNonHdmi) addSeparator(rows);
+                if (!hdmi && rows.getChildCount() > 0 && !sawNonHdmi) {
+                    View line = addSeparator(rows);
+                    if (connectedOnly) fold(line, folded);
+                }
                 if (!hdmi) sawNonHdmi = true;
                 List<TvInputInfo> devices = cecDevices.get(info.getId());
                 if (devices != null) {
@@ -3086,7 +3106,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                         String deviceLabel = name == null || name.length() == 0 ? label : name + " \u00B7 " + label;
                         final String deviceId = device.getId();
                         int state = hdmiStateBogus ? -1 : tim.getInputState(deviceId);
-                        addInputRow(rows, popup, R.drawable.ic_input, deviceLabel, state, () -> openInput(deviceId));
+                        View row = addInputRow(rows, popup, R.drawable.ic_input, deviceLabel, state, () -> openInput(deviceId));
+                        if (connectedOnly && InputFold.folds(true, state)) fold(row, folded);
                     }
                     continue;
                 }
@@ -3096,9 +3117,25 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 // Analog AV jacks have no hotplug detection, and some TVs report them as always connected
                 // (TCL Smart TV Pro G03 says "Connected" with nothing plugged in), so AV rows show no state.
                 int state = !hdmi || hdmiStateBogus ? -1 : tim.getInputState(id);
-                addInputRow(rows, popup, hdmi ? R.drawable.ic_input : R.drawable.ic_av, label, state,
+                View row = addInputRow(rows, popup, hdmi ? R.drawable.ic_input : R.drawable.ic_av, label, state,
                         () -> openInput(id));
+                if (connectedOnly && InputFold.folds(hdmi, state)) fold(row, folded);
             }
+        }
+        if (!folded.isEmpty()) {
+            View more = getLayoutInflater().inflate(R.layout.item_input, rows, false);
+            ((ImageView) more.findViewById(R.id.icon)).setImageResource(R.drawable.ic_input);
+            ((TextView) more.findViewById(R.id.title)).setText(R.string.more_inputs);
+            more.findViewById(R.id.status).setVisibility(View.GONE);
+            more.findViewById(R.id.dot).setVisibility(View.GONE);
+            more.setOnClickListener(v -> {
+                for (View f : folded) f.setVisibility(View.VISIBLE);
+                rows.removeView(more);
+                for (View f : folded) {
+                    if (f.isFocusable()) { f.requestFocus(); break; }
+                }
+            });
+            rows.addView(more);
         }
         // Coocaa OS registers nothing with TvInputManager; com.skyworth.tv lists its sources instead.
         if (rows.getChildCount() == 0) {
@@ -3150,7 +3187,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
         int alignment = getResources().getBoolean(R.bool.rtl_menu_bar) != underGear ? Gravity.END : Gravity.START;
         dropIn(popup, panel, anchor, alignment);
-        rows.getChildAt(0).requestFocus();
+        for (int i = 0; i < rows.getChildCount(); i++) {
+            View child = rows.getChildAt(i);
+            if (child.getVisibility() == View.VISIBLE && child.isFocusable()) { child.requestFocus(); break; }
+        }
+    }
+
+    private static void fold(View view, List<View> folded) {
+        view.setVisibility(View.GONE);
+        folded.add(view);
     }
 
     private PopupWindow glassPopup(View panel, int width) {
@@ -3177,16 +3222,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
     }
 
-    private void addSeparator(LinearLayout rows) {
+    private View addSeparator(LinearLayout rows) {
         View line = new View(this);
         line.setBackgroundColor(0x1FFFFFFF);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (int) density);
         int m = (int) (6 * density), h = (int) (12 * density);
         lp.setMargins(h, m, h, m);
         rows.addView(line, lp);
+        return line;
     }
 
-    private void addInputRow(LinearLayout rows, PopupWindow popup, int iconRes, String title, int state, Runnable action) {
+    private View addInputRow(LinearLayout rows, PopupWindow popup, int iconRes, String title, int state, Runnable action) {
         View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
         ((ImageView) row.findViewById(R.id.icon)).setImageResource(iconRes);
         ((TextView) row.findViewById(R.id.title)).setText(title);
@@ -3209,6 +3255,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             action.run();
         });
         rows.addView(row);
+        return row;
     }
 
     // ---- launcher settings and module cards -------------------------------------------------------
@@ -3262,6 +3309,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (moduleCards) addSettingsMenuRow(rows, popup, R.string.module_cards, this::showModuleCards);
         if (dockRow) addSettingsMenuRow(rows, popup, R.string.dock_edit, this::startDockEdit);
         addSettingsMenuRow(rows, popup, R.string.reorder, this::toggleReorder);
+        // A launcher may not restart the TV itself; the Home key helper can open the system power menu instead.
+        if (HomeKeyService.canOpenPowerMenu()) addSettingsMenuRow(rows, popup, R.string.power_menu, HomeKeyService::openPowerMenu);
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         popup.setWidth(Math.max((int) (200 * density), panel.getMeasuredWidth()));
         // Hebrew puts Settings at the left of the header: grow the menu inward from it.
@@ -3374,6 +3423,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (card == null) return;
 
         View panel = getLayoutInflater().inflate(R.layout.dialog_card_prompt, root, false);
+        boolean rtl = getResources().getBoolean(R.bool.rtl_menu_bar);
+        if (rtl) panel.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         ((TextView) panel.findViewById(R.id.title)).setText(getString(R.string.card_prompt_title, card.appLabel));
         ((TextView) panel.findViewById(R.id.body)).setText(card.state == Cards.State.RESIGNED
                 ? getString(R.string.card_prompt_resigned, card.appLabel)
@@ -3387,6 +3438,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 getString(R.string.card_prompt_identity, card.pkg, Cards.shortDigest(card.digest)));
         TextView keep = panel.findViewById(R.id.btnKeep);
         TextView show = panel.findViewById(R.id.btnShow);
+        if (rtl) {
+            LinearLayout buttons = (LinearLayout) keep.getParent();
+            buttons.removeAllViews();
+            buttons.addView(show);
+            buttons.addView(keep);
+            keep.setNextFocusLeftId(R.id.btnShow);
+            keep.setNextFocusRightId(R.id.btnKeep);
+            show.setNextFocusLeftId(R.id.btnShow);
+            show.setNextFocusRightId(R.id.btnKeep);
+        }
 
         final Dialog dialog = new Dialog(this);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -3418,8 +3479,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         View.OnKeyListener keys = (v, keyCode, event) -> {
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) return true;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return v.getId() == R.id.btnKeep;
-            return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == R.id.btnShow;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT)
+                return v.getId() == (rtl ? R.id.btnShow : R.id.btnKeep);
+            return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                    && v.getId() == (rtl ? R.id.btnKeep : R.id.btnShow);
         };
         keep.setOnKeyListener(keys);
         show.setOnKeyListener(keys);
@@ -3453,6 +3516,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void showModuleCardsNow() {
         View anchor = findViewById(R.id.btnSettings);
         View panel = getLayoutInflater().inflate(R.layout.popup_cards, root, false);
+        if (getResources().getBoolean(R.bool.rtl_menu_bar))
+            panel.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         LinearLayout rows = panel.findViewById(R.id.rows);
         final PopupWindow popup = glassPopup(panel, (int) (400 * density));
         List<Cards.Card> listed = new ArrayList<>(cards);
@@ -3461,6 +3526,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             View row = getLayoutInflater().inflate(R.layout.item_card_row, rows, false);
             row.setTag(card.pkg);
             ((TextView) row.findViewById(R.id.title)).setText(card.label);
+            if (getResources().getBoolean(R.bool.rtl_menu_bar)) {
+                LinearLayout heading = (LinearLayout) row.findViewById(R.id.title).getParent();
+                View status = row.findViewById(R.id.state);
+                heading.removeView(status);
+                heading.addView(status, 0);
+            }
             TextView app = row.findViewById(R.id.app);
             if (Cards.fold(card.label).equals(Cards.fold(card.appLabel))) app.setVisibility(View.GONE);
             else app.setText(getString(R.string.card_app_name, card.appLabel));

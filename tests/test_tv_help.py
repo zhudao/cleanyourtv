@@ -217,7 +217,7 @@ class TvHelpTest(unittest.TestCase):
         # above the adb_shell imports (and above the TV_HOST check, which exits at import time).
         lines = SCRIPT.read_text(encoding="utf-8").splitlines()
         guard = next(n for n, l in enumerate(lines) if 'sys.argv[1] in ("-h", "--help")' in l)
-        client = next(n for n, l in enumerate(lines) if l.startswith("from adb_shell"))
+        client = next(n for n, l in enumerate(lines) if l.lstrip().startswith("from adb_shell"))
         host = next(n for n, l in enumerate(lines) if 'os.environ.get("TV_HOST")' in l)
         self.assertLess(guard, client, "the help branch must run before adb_shell is imported")
         self.assertLess(guard, host, "the help branch must run before TV_HOST is required")
