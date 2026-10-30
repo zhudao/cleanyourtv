@@ -40,6 +40,8 @@
    before building. `tests/test_shipped_config_keys_are_read.py` holds every shipped `config.json` to the
    table. Do not add install or restore scripts, Private DNS or AdGuard setup, or `pm uninstall` steps: the
    folder only disables, and `tools/disable.sh` and `tools/restore.sh` do the rest.
+   `tests/test_list_folders_ship_lists_only.py` holds every folder under `examples/` to that, so a script
+   in the folder is a red suite rather than a second answer to the undo every list already has.
 
 A model with notes but no several-day list goes in `docs/devices/<brand-model>.md`, with one line under the notes
 list at the end of `examples/README.md`. A folder in `examples/` must have packages in it.
