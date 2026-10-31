@@ -40,7 +40,8 @@ VIEWS_DATE = re.compile(r"views as of (\d+) (\w{3})")
 DATE_CELL = re.compile(r"^(\d+)&nbsp;(\w{3})$")
 MONTHS = {name: number for number, name in enumerate(
     ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), 1)}
-YOUTUBE_LINK = re.compile(r"\((https?://[^)\s]*youtube\.com/[^)\s]+)\)")
+# A video row links its YouTube or Bilibili watch page.
+VIDEO_LINK = re.compile(r"\((https?://[^)\s]*(?:youtube\.com|bilibili\.com)/[^)\s]+)\)")
 # The card image the numbers are drawn on, wherever a README shows it: README.md in English, README.nl.md
 # in Dutch and README.de.md in German, and any translation that copies the picture later. The words
 # around the numbers are translated; the numbers are not.
@@ -176,9 +177,9 @@ def video_problems(text=None):
         channel, video, date, views = cells
         if not channel:
             problems.append(f"{where} has no channel")
-        found = YOUTUBE_LINK.findall(video)
+        found = VIDEO_LINK.findall(video)
         if len(found) != 1:
-            problems.append(f"{where} needs exactly one YouTube link, this one has {len(found)}")
+            problems.append(f"{where} needs exactly one YouTube or Bilibili link, this one has {len(found)}")
         elif found[0] in seen:
             problems.append(f"{found[0]} is listed twice, in video row {seen[found[0]]} and {number}")
         else:
@@ -335,7 +336,7 @@ class VideoReaderTest(unittest.TestCase):
         self.assertEqual([], video_problems(self.page(rows, count=2)))
 
     def test_the_article_rows_are_not_read_as_videos(self):
-        # The real page opens with 314 article rows over 46 sections; only what follows '## Videos' is a video.
+        # The real page opens with 351 article rows over 48 sections; only what follows '## Videos' is a video.
         problems = video_problems(self.page([self.row(1)], count=1))
         self.assertEqual([], problems)
         self.assertEqual(1, len(videos(self.page([self.row(1)], count=1))))
@@ -363,7 +364,7 @@ class VideoReaderTest(unittest.TestCase):
 
     def test_a_row_without_a_link_is_named(self):
         problems = video_problems(self.page(["| Channel | just a title | 27&nbsp;Oct | 10 |\n"]))
-        self.assertIn("video row 1 needs exactly one YouTube link, this one has 0", problems)
+        self.assertIn("video row 1 needs exactly one YouTube or Bilibili link, this one has 0", problems)
 
     def test_a_row_without_a_view_count_is_named(self):
         problems = video_problems(self.page(["| Channel | [A](https://www.youtube.com/watch?v=9) | "
