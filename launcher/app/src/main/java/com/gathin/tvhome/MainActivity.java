@@ -104,6 +104,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private static final int LAUNCHER_SETTINGS_REQUEST = 42;
     /** Sent by QuickSettingsActivity: open Launcher settings from here so Home rebuilds when they close. */
     static final String ACTION_LAUNCHER_SETTINGS = "com.gathin.tvhome.action.LAUNCHER_SETTINGS";
+    /** Sent by the "library" action word of app_keys: open the App library over Home (needs app_library). */
+    static final String ACTION_APP_LIBRARY = "com.gathin.tvhome.action.APP_LIBRARY";
     /** The system input switcher, forwarded here by InputsRequestActivity while handle_view_inputs is on. */
     static final String ACTION_VIEW_INPUTS = "com.android.tv.action.VIEW_INPUTS";
     /** Tiles per row and dock slots (res/values/config.xml, columns). Set in onCreate. */
@@ -515,6 +517,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         clockBlock = findViewById(R.id.leftBlock);
         greetingColor = greeting.getCurrentTextColor();
         if (!cfg.showGreeting) greeting.setVisibility(View.GONE);
+        // Keep the other header layouts as designed: their extra lines change the block's centre.
+        if (!cfg.showGreeting && !cfg.dateBelowClock && !cfg.shamsiDate && !cfg.lunarDate
+                && !cfg.topMenu && !getResources().getBoolean(R.bool.rtl_menu_bar)) {
+            centerCompactHeader();
+        }
         if (cfg.headerWhite) {
             // The clock's own white for the date and the line before it, instead of their dimmed whites.
             ((TextView) findViewById(R.id.date)).setTextColor(Color.WHITE);
@@ -558,6 +565,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (lunar) lunarDate.setVisibility(View.VISIBLE);
         greetingName = cfg.greetingName;
         if (cfg.dateBelowClock) moveDateBelowClock();
+        if (cfg.dateBelowClock && cfg.iconOnlyButtons && !cfg.topMenu
+                && !getResources().getBoolean(R.bool.rtl_menu_bar)) {
+            alignDateBelowIconsWithClock();
+        }
         if (shamsi) {
             shamsiDate.setVisibility(View.VISIBLE);
             TextView date = findViewById(R.id.date);
@@ -919,7 +930,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     .build(), vpnCallback);
         }
         // Not after recreate(): the launch intent survives it and would open the settings again.
-        if (savedInstanceState == null && !openLauncherSettingsIfAsked(getIntent())) openInputsIfAsked(getIntent());
+        if (savedInstanceState == null && !openLauncherSettingsIfAsked(getIntent()) && !openLibraryIfAsked(getIntent())) {
+            openInputsIfAsked(getIntent());
+        }
     }
 
     /**
@@ -972,6 +985,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         return true;
     }
 
+    /**
+     * ACTION_APP_LIBRARY, sent by the "library" action word: open the App library once Home is on screen. The intent
+     * is replaced so a later recreate() does not open it again. With app_library off there is no library, so the
+     * press only brings Home forward.
+     */
+    private boolean openLibraryIfAsked(Intent intent) {
+        if (intent == null || !ACTION_APP_LIBRARY.equals(intent.getAction())) return false;
+        setIntent(new Intent(Intent.ACTION_MAIN));
+        if (!appLibraryEnabled) return true;
+        getWindow().getDecorView().post(() -> {
+            if (!isFinishing() && !isDestroyed()) onLibraryRequested();
+        });
+        return true;
+    }
+
     private boolean openLauncherSettingsIfAsked(Intent intent) {
         if (intent == null || !ACTION_LAUNCHER_SETTINGS.equals(intent.getAction())) return false;
         setIntent(new Intent(Intent.ACTION_MAIN));
@@ -988,6 +1016,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         if (openLauncherSettingsIfAsked(intent)) return;
+        if (openLibraryIfAsked(intent)) return;
         if (openInputsIfAsked(intent)) return;
         if (intent == null || !intent.hasCategory(Intent.CATEGORY_HOME)) return;
         if (gameDay != null && !stopped) gameDay.read();
@@ -1684,6 +1713,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     @Override
+    @SuppressWarnings("deprecation")
     public void onBackPressed() {
         // Home screen: Back goes nowhere, unless back_opens_clock is on.
         if (backOpensClock) startActivity(new Intent(this, ClockActivity.class));
@@ -2431,6 +2461,44 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
     }
 
+    /** Centre the one-row header when the greeting and extra date lines are absent (#2265). */
+    private void centerCompactHeader() {
+        LinearLayout clockRow = (LinearLayout) findViewById(R.id.clock).getParent();
+        clockRow.setGravity(Gravity.CENTER_VERTICAL);
+        clockRow.setBaselineAligned(false);
+        View[] columns = {findViewById(R.id.clockDivider), (View) findViewById(R.id.date).getParent()};
+        for (View column : columns) {
+            LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) column.getLayoutParams();
+            lp.gravity = Gravity.CENTER_VERTICAL;
+            lp.bottomMargin = 0;
+            column.setLayoutParams(lp);
+        }
+        LinearLayout buttons = findViewById(R.id.topButtons);
+        RelativeLayout.LayoutParams lp = (RelativeLayout.LayoutParams) buttons.getLayoutParams();
+        lp.addRule(RelativeLayout.ALIGN_TOP, R.id.leftBlock);
+        lp.bottomMargin = 0;
+        buttons.setLayoutParams(lp);
+        buttons.setGravity(Gravity.CENTER_VERTICAL);
+    }
+
+    /** With the date below, keep the icons beside the clock rather than beside the last date line. */
+    private void alignDateBelowIconsWithClock() {
+        View clock = findViewById(R.id.clock);
+        View clockRow = (View) clock.getParent();
+        LinearLayout buttons = findViewById(R.id.topButtons);
+        RelativeLayout.LayoutParams lp = (RelativeLayout.LayoutParams) buttons.getLayoutParams();
+        lp.addRule(RelativeLayout.ALIGN_TOP, R.id.leftBlock);
+        lp.removeRule(RelativeLayout.ALIGN_BOTTOM);
+        lp.topMargin = 0;
+        lp.bottomMargin = 0;
+        buttons.setLayoutParams(lp);
+        // Either side can be laid out first; update after both without requesting another layout mid-pass.
+        Runnable align = () -> buttons.setTranslationY(clockRow.getTop() + clock.getTop()
+                + (clock.getHeight() - buttons.getHeight()) / 2f);
+        clockRow.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> align.run());
+        buttons.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> align.run());
+    }
+
     /** The first top-bar button after Inputs that is shown, in bar order (top_bar_apps, the network pill, ...); Settings is always there. */
     private View firstTopButton() {
         ViewGroup bar = findViewById(R.id.topButtons);
@@ -2797,6 +2865,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     /** Shows the Wi-Fi network name on the button when we can read it, otherwise the connection type. */
+    @SuppressWarnings("deprecation")
     private void updateWifiLabel() {
         String text = getString(R.string.wifi);
         boolean vpn = false, online = false, validated = false;
