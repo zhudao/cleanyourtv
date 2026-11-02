@@ -2,6 +2,8 @@
 # Android 10 (Android TV, API 29), firmware BRAVIA_UR3_EU-user 10 QTG3.200305.006.S97 662301
 # and Taiwan retail KD-55X8000H, firmware BRAVIA_UR3_TW-user 10 QTG3.200305.006.S97 662301
 # Third unit: KD-65A8 (A8 OLED 2020, UK), same EU build, 2.3 GB RAM (#2717, @Nachiketin)
+# Fourth unit: XBR-55A8H (A8H OLED 2020, US, BRAVIA_UR3_UC, same build number), used as a display for an
+# Apple TV: its further-reaching list is debloat-display-only.txt (AirPlay/Vewd crash-loop warning there).
 #
 # Apply:   TV_HOST=<tv ip> tools/disable.sh examples/sony-bravia-4k-ur3/debloat.txt
 # Undo:    TV_HOST=<tv ip> tools/restore.sh examples/sony-bravia-4k-ur3/debloat.txt
